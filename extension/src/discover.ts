@@ -28,7 +28,11 @@ export function resolveImageUrl(el: HTMLImageElement): string | null {
   for (const raw of candidates) {
     if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) continue; // placeholders and extension-created blobs
     try {
-      return new URL(raw, document.baseURI).toString();
+      const url = new URL(raw, document.baseURI).toString();
+      // Vector art (payment logos, icons) is rasterized by the page at any px
+      // size, so px checks cannot filter it; the server only handles rasters.
+      if (/\.svg(?:$|[?#])/i.test(url)) continue;
+      return url;
     } catch {
       continue;
     }

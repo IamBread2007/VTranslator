@@ -72,6 +72,12 @@ describe("isMangaCandidate", () => {
     expect(isMangaCandidate(img({ src: "blob:http://site/uuid" }))).toBe(false);
   });
 
+  it("rejects vector logos (svg)", () => {
+    // Payment/logo SVGs are large enough in px but are not manga pages.
+    expect(isMangaCandidate(img({ src: "/assets/visa-white-B2cVp6Zn.svg", width: "244", height: "150" }))).toBe(false);
+    expect(resolveImageUrl(img({ src: "/logo.svg" }))).toBeNull();
+  });
+
   it("rejects elements the extension already processed", () => {
     expect(isMangaCandidate(img({ src: "/a.jpg", "data-mt-state": "pending" }))).toBe(false);
     expect(isMangaCandidate(img({ src: "/a.jpg", "data-mt-state": "done" }))).toBe(false);
