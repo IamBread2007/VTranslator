@@ -89,3 +89,19 @@ extension: npm test → 5 files / 27 tests ✓  typecheck ✓  build → 3 bundl
    `--load-extension` đã thay equivalent.
 2. Trang hotlink thật → kiểm chứng Referer retry + session rule cleanup.
 3. Chrome Task Manager xem RAM extension khi đọc nhiều chương.
+
+## Hồi quy sau Task 14 — MangaDex & Pixiv (live, CDP)
+
+| Site | Symptom | Nguyên nhân | Fix (commit) |
+| --- | --- | --- | --- |
+| MangaDex | badge đỏ `Lỗi — bấm để thử lại` dù 2 ảnh dịch `done` | logo thanh toán là **SVG** rasterize bất kỳ size nào → vượt `MIN_EDGE=100`, gửi lên server lỗi | `c47a015` — reject `.svg` trong `resolveImageUrl` (điểm chặn duy nhất cho cả 2 đường enqueue) |
+| Pixiv | có call API trong OmniRoute nhưng màn hình vẫn tiếng Nhật | 12 thumbnail **ẩn 0×0** (`display:none`, `naturalWidth=0 → size null → true`) chen hàng đầu queue tuần tự, chặn ảnh thật; icon `comic.png` lỗi → badge đỏ. Ảnh gallery mount sau trigger không được enqueue; Pixiv render **2 copy** cùng URL (bản dịch nằm dưới bản Nhật) | `98e586b` — `isVisibleCandidate`: gate render-size `≥100px` mỗi chiều ngay trong `enqueue()` (không set state khi skip → Alt+T sau vẫn retry được) |
+
+Evidence (CDP + vision model review, `C:/Windows/TEMP/mtcdp/pixiv4*.txt`):
+topmost element tại tâm ảnh sau fix = blob img của extension; screenshot review
+ghi nhận header `Chuyến Deep Dive trong mơ của tôi` + bubble tiếng Việt, 0 badge
+lỗi. 4/5 ảnh Pixiv `done` — trang p3 nằm ngoài cửa sổ ±1500px nên chỉ enqueue
+sau khi cuộn + Alt+T (đúng design `enqueueNearby`).
+
+Gates sau 2 fix: `npm test` 5 files / **31 tests** ✓, `tsc --noEmit` ✓,
+`node build.mjs` → 3 bundles ✓.
