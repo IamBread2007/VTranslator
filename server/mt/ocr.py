@@ -200,6 +200,17 @@ PADDLE_ARGS = {
     "paddle:korean": {"lang": "korean"},
 }
 
+# Server models cost 4-15s per vertical bubble crop on CPU (measured 2026-10-01);
+# mobile does the whole page in ~6s and a crop in ~0.4s. Pinning any model name
+# makes PaddleOCR ignore `lang`, so only the zh-dict primary probe may pin models;
+# `lang="korean"` already resolves to a mobile rec with the Hangul dict.
+PADDLE_MODELS = {
+    "paddle:v5": {
+        "text_detection_model_name": "PP-OCRv5_mobile_det",
+        "text_recognition_model_name": "PP-OCRv5_mobile_rec",
+    },
+}
+
 
 class PaddleOcrEngine:
     def __init__(self, key: str):
@@ -211,6 +222,7 @@ class PaddleOcrEngine:
         self._ocr = PaddleOCR(
             **PADDLE_ARGS[key],
             ocr_version="PP-OCRv5",
+            **PADDLE_MODELS.get(key, {}),
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,

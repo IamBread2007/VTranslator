@@ -66,7 +66,7 @@ def build_pipeline(s: Settings) -> Pipeline:
             "detector": MODEL_ID,
             "threshold": DETECTOR_THRESHOLD,
             "ocr_engine": s.ocr_engine,
-            "ocr_version": "PP-OCRv5",
+            "ocr_version": "PP-OCRv5-mobile",
             "style_engine": s.style_engine,
             "inpainter": s.inpainter,
         },

@@ -128,3 +128,12 @@ def test_resolve_low_evidence_warns():
     )
     assert (r.lang, r.evidence) == ("zh", "low")
     assert r.warnings and "inconclusive" in r.warnings[0]
+
+
+def test_korean_probe_never_pins_model_names():
+    # Pinning a model name makes PaddleOCR ignore `lang`, which silently
+    # swaps the korean probe to the zh dict (regression caught 2026-10-01).
+    from mt.ocr import PADDLE_ARGS, PADDLE_MODELS
+
+    assert set(PADDLE_MODELS) <= set(PADDLE_ARGS)
+    assert "paddle:korean" not in PADDLE_MODELS

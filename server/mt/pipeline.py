@@ -27,7 +27,8 @@ from .ocr import (
 from .schemas import Block, Box, Style, TranslateOptions, TranslateResponse
 from .translator import PROMPT_VERSION
 
-PIPELINE_VERSION = "2"
+# v3: PP-OCRv5 mobile det/rec replaced server models (CPU speed), CUDA torch.
+PIPELINE_VERSION = "3"
 BUBBLE_SHRINK = 0.12
 TEXT_KINDS = ("text_bubble", "text_free")
 

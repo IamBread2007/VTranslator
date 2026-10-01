@@ -6,6 +6,8 @@ httpx
 numpy
 pillow
 opencv-python-headless
+# On NVIDIA GPUs install torch from the cu130 index for ~4x OCR/detector speed:
+#   pip install torch==2.14.1+cu130 --index-url https://download.pytorch.org/whl/cu130
 torch
 transformers
 paddlepaddle
