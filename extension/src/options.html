@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cài đặt Manga Translator</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 32rem;
+        margin: 2rem auto;
+        line-height: 1.5;
+      }
+      .row {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        margin-bottom: 1rem;
+      }
+      #status {
+        margin-top: 1rem;
+        padding: 0.5rem;
+        border-radius: 4px;
+      }
+      #status.ok { background: #e6f4ea; }
+      #status.err { background: #fce8e6; }
+    </style>
+  </head>
+  <body>
+    <h1>Manga Translator</h1>
+    <form id="form">
+      <div class="row">
+        <label for="serverUrl">URL server local</label>
+        <input id="serverUrl" name="serverUrl" type="url" required />
+      </div>
+      <div class="row">
+        <label for="token">Token (X-MT-Token)</label>
+        <input id="token" name="token" type="password" autocomplete="off" />
+      </div>
+      <div class="row">
+        <label for="sourceLang">Ngôn ngữ nguồn</label>
+        <select id="sourceLang" name="sourceLang">
+          <option value="auto">Tự động nhận diện</option>
+          <option value="ja">Tiếng Nhật</option>
+          <option value="ko">Tiếng Hàn</option>
+          <option value="zh">Tiếng Trung</option>
+          <option value="en">Tiếng Anh</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="targetLang">Ngôn ngữ đích</label>
+        <input id="targetLang" name="targetLang" value="vi" readonly />
+      </div>
+      <button type="button" id="check">Kiểm tra kết nối</button>
+      <button type="submit">Lưu</button>
+    </form>
+    <div id="status" role="status" aria-live="polite"></div>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

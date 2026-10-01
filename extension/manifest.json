@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Manga Translator",
+  "description": "Dịch truyện tranh trực tiếp trên trang đọc, dùng server local.",
+  "version": "0.1.0",
+  "permissions": ["storage", "declarativeNetRequest", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "options_page": "options.html",
+  "commands": {
+    "translate-page": {
+      "suggested_key": { "default": "Alt+T" },
+      "description": "Dịch các ảnh chưa dịch trên trang"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["fonts/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
