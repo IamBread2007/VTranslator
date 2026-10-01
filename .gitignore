@@ -7,3 +7,5 @@ node_modules/
 extension/dist/
 .pytest_cache/
 workspace/
+.superpowers/
+*.log

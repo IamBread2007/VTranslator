@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-multipart
+httpx
+numpy
+pillow
+opencv-python-headless
+torch
+transformers
+paddlepaddle
+paddleocr
+manga-ocr
+pytest
