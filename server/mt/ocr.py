@@ -250,11 +250,12 @@ def get_engine(key: str) -> OcrEngine:
     return _ENGINES[key]
 
 
-def make_probe(key: str) -> Probe:
+def make_probe(key: str, get: Callable[[str], OcrEngine] | None = None) -> Probe:
     """Probe callable over crops; engine is loaded only when first called."""
+    getter = get or get_engine
 
     def probe(crops: list[Image.Image]) -> tuple[str, float | None]:
-        engine = get_engine(key)
+        engine = getter(key)
         results = [engine.read(c) for c in crops]
         scored = [r.confidence for r in results if r.text and r.confidence is not None]
         conf = sum(scored) / len(scored) if scored else 0.0
