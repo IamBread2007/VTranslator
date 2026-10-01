@@ -31,7 +31,9 @@ def _iou(a: Box, b: Box) -> float:
     return inter / union if union else 0.0
 
 
-def merge_boxes(found: list[tuple[Box, int, float]], iou_thr: float = 0.5) -> list[tuple[Box, int, float]]:
+def merge_boxes(
+    found: list[tuple[Box, int, float]], iou_thr: float = 0.5
+) -> list[tuple[Box, int, float]]:
     """Per-class NMS: keep higher score, drop same-class boxes with IoU > thr."""
     kept: list[tuple[Box, int, float]] = []
     for box, label, score in sorted(found, key=lambda t: -t[2]):
@@ -44,7 +46,10 @@ def merge_boxes(found: list[tuple[Box, int, float]], iou_thr: float = 0.5) -> li
 def contains(outer: Box, inner: Box, min_frac: float = 0.8) -> bool:
     """True when at least min_frac of inner's area lies inside outer."""
     ix0, iy0 = max(outer.x, inner.x), max(outer.y, inner.y)
-    ix1, iy1 = min(outer.x + outer.w, inner.x + inner.w), min(outer.y + outer.h, inner.y + inner.h)
+    ix1, iy1 = (
+        min(outer.x + outer.w, inner.x + inner.w),
+        min(outer.y + outer.h, inner.y + inner.h),
+    )
     inter = max(0, ix1 - ix0) * max(0, iy1 - iy0)
     area = inner.w * inner.h
     return area > 0 and inter / area >= min_frac

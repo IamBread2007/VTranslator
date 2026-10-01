@@ -8,9 +8,9 @@ class Settings(BaseSettings):
     llm_base_url: str
     llm_api_key: str
     llm_model: str
-    ocr_engine: str = "auto"          # auto | paddle | manga_ocr
-    inpainter: str = "opencv"         # opencv | lama
-    style_engine: str = "kmeans"      # kmeans | yuzu
+    ocr_engine: str = "auto"  # auto | paddle | manga_ocr
+    inpainter: str = "opencv"  # opencv | lama
+    style_engine: str = "kmeans"  # kmeans | yuzu
     cache_dir: str = ".cache"
     llm_timeout_s: float = 90.0
     host: str = "127.0.0.1"

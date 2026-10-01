@@ -32,6 +32,10 @@ def create_app(settings: Settings, pipeline=None) -> FastAPI:
 
     @app.post("/translate", dependencies=[Depends(auth)])
     def translate() -> Response:
-        return Response(status_code=501, content="pipeline not implemented yet", media_type="text/plain")
+        return Response(
+            status_code=501,
+            content="pipeline not implemented yet",
+            media_type="text/plain",
+        )
 
     return app
