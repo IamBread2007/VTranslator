@@ -9,3 +9,5 @@ extension/dist/
 workspace/
 .superpowers/
 *.log
+.vitest/
+mangaPanelForTesting.jpg

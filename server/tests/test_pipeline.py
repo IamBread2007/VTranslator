@@ -149,6 +149,20 @@ def test_changed_context_misses_translation_only(tmp_path):
     assert tr.calls == 2  # translation invalidated
 
 
+def test_changed_llm_model_misses_translation_only(tmp_path):
+    # Cache keys must include the model: a different model may translate
+    # differently, but perception (detect/OCR) results stay valid.
+    det = FakeDet(default_text_items())
+    tr = FakeTr()
+    p = make_pipeline(tmp_path, detector=det, translator=tr)
+    opts = TranslateOptions(source_lang="ja")
+    p.run(_png(), opts)
+    p.llm_model = "other-model"
+    p.run(_png(), opts)
+    assert det.calls == 1
+    assert tr.calls == 2
+
+
 def test_rejects_too_many_pixels_before_rgb_decode(tmp_path):
     p = make_pipeline(tmp_path, max_pixels=10_000)
     with pytest.raises(ImageTooLargeError):

@@ -35,9 +35,15 @@ async function registerFace(family: string, weight: number, url: string): Promis
   const buf = await (await fetch(url)).arrayBuffer();
   const face = new FontFace(family, buf, { weight: String(weight) });
   await face.load();
-  // SAFETY: every JS realm that reaches here (page or service worker) exposes a
-  // global FontFaceSet as `fonts`; lib.dom types it only on Document.
-  (self as unknown as { fonts: FontFaceSet }).fonts.add(face);
+  // SAFETY: the FontFaceSet lives on document in pages (content script) and on
+  // the global in service workers; lib.dom types it only on Document.
+  const g = globalThis as unknown as {
+    document?: { fonts: FontFaceSet };
+    fonts?: FontFaceSet;
+  };
+  const fonts = g.document?.fonts ?? g.fonts;
+  if (!fonts) throw new Error("FontFaceSet unavailable in this realm");
+  fonts.add(face);
 }
 
 /** Canvas measures with the exact face the renderer will draw. */
