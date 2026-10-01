@@ -1,0 +1,9 @@
+server/.env
+server/.cache/
+__pycache__/
+.venv/
+server/.venv/
+node_modules/
+extension/dist/
+.pytest_cache/
+workspace/
