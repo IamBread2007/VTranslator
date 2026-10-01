@@ -60,6 +60,16 @@ export function isMangaCandidate(el: HTMLImageElement): boolean {
   return Math.max(size.w, size.h) >= MIN_EDGE && Math.min(size.w, size.h) >= MIN_EDGE;
 }
 
+/**
+ * Dispatch-time rendered-size gate: `display:none` thumbnails and unloaded
+ * placeholders have a 0x0 rect. Without this check they consume the
+ * sequential queue and starve the images actually on screen.
+ */
+export function isVisibleCandidate(el: HTMLImageElement): boolean {
+  const r = el.getBoundingClientRect();
+  return r.width >= MIN_EDGE && r.height >= MIN_EDGE;
+}
+
 interface Entry {
   el: HTMLImageElement;
   url: string;

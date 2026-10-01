@@ -1,5 +1,5 @@
 // Content script: candidate discovery, single-file translate queue, image swap.
-import { isMangaCandidate, resolveImageUrl, TranslateQueue } from "./discover";
+import { isMangaCandidate, isVisibleCandidate, resolveImageUrl, TranslateQueue } from "./discover";
 import { composePage } from "./render";
 import { loadSettings } from "./settings";
 import type { TranslateResponse } from "./types";
@@ -145,7 +145,7 @@ document.addEventListener("keyup", (e) => {
 
 function enqueue(el: HTMLImageElement, opts: { priority?: boolean } = {}): void {
   if (el.getAttribute(STATE) === "pending" || el.getAttribute(STATE) === "done") return;
-  if (!isMangaCandidate(el)) return;
+  if (!isMangaCandidate(el) || !isVisibleCandidate(el)) return;
   queue.enqueue(el, opts);
   void pump();
   if (overlayHost === btn) clearOverlay(btn);

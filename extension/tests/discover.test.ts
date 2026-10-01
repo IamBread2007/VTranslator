@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { resolveImageUrl, isMangaCandidate, TranslateQueue } from "../src/discover";
+import {
+  resolveImageUrl,
+  isMangaCandidate,
+  isVisibleCandidate,
+  TranslateQueue,
+} from "../src/discover";
 
 function img(attrs: Record<string, string>): HTMLImageElement {
   const el = document.createElement("img");
@@ -119,5 +124,28 @@ describe("TranslateQueue", () => {
     expect(q.dequeue()).toBeUndefined(); // no parallel job while in flight
     q.settle();
     expect(q.dequeue()).toBe(auto);
+  });
+});
+
+describe("isVisibleCandidate", () => {
+  function rendered(el: HTMLImageElement, w: number, h: number): HTMLImageElement {
+    el.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: w, height: h, top: 0, left: 0, right: w, bottom: h, toJSON: () => ({}) }) as DOMRect;
+    return el;
+  }
+
+  it("rejects images with no rendered box (hidden or unloaded placeholders)", () => {
+    // jsdom rects are 0x0; this mirrors display:none thumbnails that used to
+    // fill the queue and starve the images actually on screen.
+    expect(isVisibleCandidate(img({ src: "/hero.jpg", width: "726", height: "1200" }))).toBe(false);
+  });
+
+  it("accepts a gallery-sized rendered image", () => {
+    expect(isVisibleCandidate(rendered(img({ src: "/p1.jpg" }), 500, 826))).toBe(true);
+  });
+
+  it("rejects images rendered smaller than the minimum edge", () => {
+    expect(isVisibleCandidate(rendered(img({ src: "/strip.jpg" }), 60, 400))).toBe(false);
+    expect(isVisibleCandidate(rendered(img({ src: "/bar.jpg" }), 900, 80))).toBe(false);
   });
 });
