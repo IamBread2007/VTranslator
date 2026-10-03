@@ -1,7 +1,6 @@
 // Content script: candidate discovery, single-file translate queue, image swap.
 import { isMangaCandidate, isVisibleCandidate, resolveImageUrl, TranslateQueue } from "./discover";
 import { composePage } from "./render";
-import { loadSettings } from "./settings";
 import type { TranslateResponse } from "./types";
 
 const MAX_CONTEXT = 20;
@@ -12,15 +11,6 @@ const ORIG_SRCSET = "data-mt-original-srcset";
 const queue = new TranslateQueue();
 const blobs = new Map<HTMLImageElement, string>();
 const translations: string[] = []; // rolling context, completed pages only
-let autoMode = false;
-
-async function initAutoMode(): Promise<void> {
-  const settings = await loadSettings(); // throws without storage permission
-  autoMode = settings.autoSites.includes(location.hostname);
-}
-initAutoMode().catch(() => {
-  autoMode = false;
-});
 
 /* ---------------- UI ---------------- */
 
@@ -204,23 +194,10 @@ async function translateOne(el: HTMLImageElement): Promise<void> {
 
 /* ---------------- observation ---------------- */
 
-const observer = new IntersectionObserver(
-  (entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const el = entry.target;
-      if (el instanceof HTMLImageElement && autoMode) enqueue(el);
-    }
-  },
-  { rootMargin: "1500px 0px" },
-);
-
-function scan(root: ParentNode): void {
-  for (const img of root.querySelectorAll("img")) {
-    if (isMangaCandidate(img)) observer.observe(img);
-  }
-}
-scan(document);
+// Nothing is translated on its own initiative: images reach the queue only
+// through an explicit user action (hover button, Alt+T, context menu, retry),
+// and each of those paths re-queries the live DOM at trigger time, so newly
+// inserted images need no pre-scanning.
 
 // Fallback when the browser command is unavailable (e.g. key taken);
 // the registered command path forwards from background.ts instead.
@@ -257,10 +234,6 @@ const mo = new MutationObserver((records) => {
         if (!(node instanceof HTMLImageElement)) continue;
         revokeEl(node);
         queue.remove(node);
-        observer.unobserve(node);
-      }
-      for (const node of rec.addedNodes) {
-        if (node instanceof Element) scan(node);
       }
     }
   }

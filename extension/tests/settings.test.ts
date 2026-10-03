@@ -3,20 +3,28 @@ import { loadSettings, saveSettings, DEFAULTS } from "../src/settings";
 
 type Store = Record<string, unknown>;
 
+type Area = { data: Store; getKeys: string[][]; set: (d: Store) => void };
+
+function makeArea(): Area {
+  // set() closes over `area`, which is safe: the mock body only runs when a caller invokes it.
+  const area: Area = {
+    data: {},
+    getKeys: [],
+    set: vi.fn((d: Store) => Object.assign(area.data, d)),
+  };
+  return area;
+}
+
 function makeChrome() {
-  const sync: { data: Store; set: (d: Store) => void } = {
-    data: {},
-    set: vi.fn((d: Store) => Object.assign(sync.data, d)),
-  };
-  const local: { data: Store; set: (d: Store) => void } = {
-    data: {},
-    set: vi.fn((d: Store) => Object.assign(local.data, d)),
-  };
-  const get = (area: { data: Store }) => vi.fn((keys: string[]) => {
-    const out: Store = {};
-    for (const k of keys) if (k in area.data) out[k] = area.data[k];
-    return Promise.resolve(out);
-  });
+  const sync = makeArea();
+  const local = makeArea();
+  const get = (area: Area) =>
+    vi.fn((keys: string[]) => {
+      area.getKeys.push(keys);
+      const out: Store = {};
+      for (const k of keys) if (k in area.data) out[k] = area.data[k];
+      return Promise.resolve(out);
+    });
   (globalThis as { chrome: typeof chrome }).chrome = {
     storage: {
       sync: { set: sync.set, get: get(sync) },
@@ -26,8 +34,12 @@ function makeChrome() {
   return { sync, local };
 }
 
+let areas: ReturnType<typeof makeChrome>;
+
 describe("settings storage split", () => {
-  beforeEach(() => makeChrome());
+  beforeEach(() => {
+    areas = makeChrome();
+  });
 
   it("token only ever lands in local, never sync", async () => {
     await saveSettings({ ...DEFAULTS, token: "s3cret" });
@@ -47,6 +59,27 @@ describe("settings storage split", () => {
 
   it("missing values fall back to defaults", async () => {
     const s = await loadSettings();
+    expect(s).toEqual(DEFAULTS);
+  });
+
+  // Auto-translate was removed: no code path may read or write the old
+  // autoSites key, so a profile that still syncs it cannot resurrect it.
+  it("never touches autoSites in either storage area", async () => {
+    await saveSettings({ ...DEFAULTS, token: "s3cret" });
+    await loadSettings();
+
+    const readKeys = [...areas.sync.getKeys, ...areas.local.getKeys].flat();
+    expect(readKeys).not.toContain("autoSites");
+    const syncWritten = vi
+      .mocked(chrome.storage.sync.set)
+      .mock.calls.flatMap(([data]) => Object.keys(data as Store));
+    expect(syncWritten).not.toContain("autoSites");
+  });
+
+  it("ignores a stale autoSites value left by an older version", async () => {
+    await chrome.storage.sync.set({ autoSites: ["example.org"] });
+    const s = await loadSettings();
+    expect(s).not.toHaveProperty("autoSites");
     expect(s).toEqual(DEFAULTS);
   });
 });
