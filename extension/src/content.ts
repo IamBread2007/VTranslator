@@ -1,12 +1,10 @@
 // Content script: candidate discovery, single-file translate queue, image swap.
 import { isMangaCandidate, isVisibleCandidate, resolveImageUrl, TranslateQueue } from "./discover";
 import { composePage } from "./render";
+import { STATE, ORIG_SRC, ORIG_SRCSET, onSiteSourceSwap } from "./imgsrc";
 import type { TranslateResponse } from "./types";
 
 const MAX_CONTEXT = 20;
-const STATE = "data-mt-state";
-const ORIG_SRC = "data-mt-original-src";
-const ORIG_SRCSET = "data-mt-original-srcset";
 
 const queue = new TranslateQueue();
 const blobs = new Map<HTMLImageElement, string>();
@@ -222,13 +220,9 @@ const mo = new MutationObserver((records) => {
       const next = el.getAttribute(rec.attributeName ?? "src") ?? "";
       // Our own swap produces blob: URLs; ignore it to avoid feedback loops.
       if (next.startsWith("blob:")) continue;
-      const state = el.getAttribute(STATE);
-      if (state === "done" || state === "error") {
-        revokeEl(el);
-        el.removeAttribute(STATE);
-        el.removeAttribute(ORIG_SRC);
-        enqueue(el); // site swapped the source: re-evaluate
-      }
+      // Stale translation bookkeeping is cleared, never re-queued: only an
+      // explicit user action may start another translate.
+      onSiteSourceSwap(el, revokeEl);
     } else if (rec.type === "childList") {
       for (const node of rec.removedNodes) {
         if (!(node instanceof HTMLImageElement)) continue;
