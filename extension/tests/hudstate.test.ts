@@ -1,9 +1,23 @@
-import { describe, it, expect } from "vitest";
-import { summarize, emptyView, badgeFor, TTL_MS, type Counts } from "../src/hudstate";
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach } from "vitest";
+import { collectCounts, summarize, emptyView, badgeFor, TTL_MS, type Counts } from "../src/hudstate";
 
 function counts(partial: Partial<Counts> = {}): Counts {
   return { total: 0, done: 0, error: 0, running: false, ...partial };
 }
+
+// collectCounts reads the attribute contract that imgsrc.ts owns, so the
+// fixtures use the same spelling rather than a local constant.
+function mkImg(state?: string): HTMLImageElement {
+  const img = document.createElement("img");
+  if (state !== undefined) img.setAttribute("data-mt-state", state);
+  document.body.appendChild(img);
+  return img;
+}
+
+afterEach(() => {
+  document.body.innerHTML = "";
+});
 
 describe("summarize", () => {
   it("reports progress while a request is in flight", () => {
@@ -76,6 +90,88 @@ describe("badgeFor", () => {
 
   it("is blank when idle", () => {
     expect(badgeFor(counts())).toEqual({ text: "", color: "#5f6368" });
+  });
+
+  it("keeps a fraction that fits the four-character toolbar budget", () => {
+    expect(badgeFor(counts({ total: 1, done: 1, running: true }))).toEqual({
+      text: "1/1",
+      color: "#5f6368",
+    });
+  });
+
+  it("collapses a fraction wider than four characters instead of shipping a clipped badge", () => {
+    // "12/25" is five characters; Chrome truncates the overflow silently.
+    expect(badgeFor(counts({ total: 25, done: 12, running: true }))).toEqual({
+      text: "...",
+      color: "#5f6368",
+    });
+  });
+
+  it("collapses a done count wider than four characters", () => {
+    expect(badgeFor(counts({ total: 12345, done: 12345 }))).toEqual({
+      text: "...",
+      color: "#5f6368",
+    });
+  });
+
+  it("never collapses the single-character error badge", () => {
+    expect(badgeFor(counts({ total: 9, error: 9 }))).toEqual({ text: "!", color: "#b3261e" });
+  });
+});
+
+describe("collectCounts", () => {
+  it("reports no images and mirrors busy into running for an untouched page", () => {
+    expect(collectCounts(document, false)).toEqual({ total: 0, done: 0, error: 0, running: false });
+    expect(collectCounts(document, true)).toEqual({ total: 0, done: 0, error: 0, running: true });
+  });
+
+  it("counts each state and treats a pending image as work still running", () => {
+    mkImg("done");
+    mkImg("done");
+    mkImg("error");
+    mkImg("pending");
+
+    expect(collectCounts(document, false)).toEqual({ total: 4, done: 2, error: 1, running: true });
+  });
+
+  it("is not running when every image has settled", () => {
+    mkImg("done");
+    mkImg("done");
+    mkImg("error");
+
+    expect(collectCounts(document, false)).toEqual({ total: 3, done: 2, error: 1, running: false });
+  });
+
+  it("stays running while the caller reports in-flight work even with no pending image", () => {
+    mkImg("done");
+
+    expect(collectCounts(document, true).running).toBe(true);
+  });
+
+  it("counts an image whose state is unrecognised in total only", () => {
+    // A future state value must not silently disappear from the denominator.
+    mkImg("skipped");
+
+    expect(collectCounts(document, false)).toEqual({ total: 1, done: 0, error: 0, running: false });
+  });
+
+  it("ignores images with no state attribute and elements that are not images", () => {
+    document.body.appendChild(document.createElement("img"));
+    const div = document.createElement("div");
+    div.setAttribute("data-mt-state", "done");
+    document.body.appendChild(div);
+
+    expect(collectCounts(document, false)).toEqual({ total: 0, done: 0, error: 0, running: false });
+  });
+
+  it("scans the root it is handed, not only the document", () => {
+    const section = document.createElement("section");
+    document.body.appendChild(section);
+    const img = document.createElement("img");
+    img.setAttribute("data-mt-state", "pending");
+    section.appendChild(img);
+
+    expect(collectCounts(section, false)).toEqual({ total: 1, done: 0, error: 0, running: true });
   });
 });
 

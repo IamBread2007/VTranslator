@@ -6,6 +6,7 @@
   "permissions": ["storage", "declarativeNetRequest", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Manga Translator — Alt+T để dịch trang" },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

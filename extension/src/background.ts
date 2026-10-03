@@ -10,6 +10,19 @@ interface TranslateRequest {
   prevContext: string[];
 }
 
+/**
+ * The content script mirroring its counts onto this tab's toolbar badge.
+ * `badge` is already the rendered text+color pair from hudstate.badgeFor, so
+ * this worker never re-derives wording — one module owns the clamp and the
+ * colors, the other only forwards them.
+ */
+interface ProgressRequest {
+  type: "mt-progress";
+  badge: { text: string; color: string };
+}
+
+type IncomingMessage = TranslateRequest | ProgressRequest;
+
 const SERVER_TIMEOUT_MS = 120_000;
 
 class StepError extends Error {
@@ -116,7 +129,15 @@ async function callServer(
   return (await resp.json()) as TranslateResponse;
 }
 
-chrome.runtime.onMessage.addListener((msg: TranslateRequest, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: IncomingMessage, sender, sendResponse) => {
+  if (msg.type === "mt-progress") {
+    const tabId = sender.tab?.id;
+    if (tabId !== undefined) {
+      void chrome.action.setBadgeText({ tabId, text: msg.badge.text });
+      void chrome.action.setBadgeBackgroundColor({ tabId, color: msg.badge.color });
+    }
+    return undefined;
+  }
   if (msg.type !== "translate") return undefined;
   void (async () => {
     try {

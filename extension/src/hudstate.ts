@@ -12,6 +12,30 @@ export interface Counts {
 
 export type HudKind = "idle" | "running" | "done" | "error" | "empty";
 
+/**
+ * Count the images this extension has touched under `root`.
+ *
+ * `busy` reports work the DOM cannot show yet (the queue accepted an item but
+ * `data-mt-state` is only written by pump), so running must not be derived
+ * from a pending image alone. Every image carrying `data-mt-state` counts into
+ * `total` regardless of its value: an unrecognised state still represents
+ * coverage the HUD's fraction would otherwise silently drop.
+ */
+export function collectCounts(root: ParentNode, busy: boolean): Counts {
+  let total = 0;
+  let done = 0;
+  let error = 0;
+  let pending = false;
+  for (const img of root.querySelectorAll("img[data-mt-state]")) {
+    total++;
+    const state = img.getAttribute("data-mt-state");
+    if (state === "done") done++;
+    else if (state === "error") error++;
+    else if (state === "pending") pending = true;
+  }
+  return { total, done, error, running: busy || pending };
+}
+
 export interface HudView {
   kind: HudKind;
   text: string;
@@ -51,8 +75,17 @@ export function badgeFor(c: Counts): { text: string; color: string } {
   // The badge sits on a per-image anchor, so running shows the fraction that
   // finished rather than a bare count; errors win over counts because they need
   // the user's attention, and an empty string means "draw no badge at all".
-  if (c.running) return { text: `${c.done}/${c.total}`, color: "#5f6368" };
+  if (c.running) return clampBadge(`${c.done}/${c.total}`, "#5f6368");
   if (c.error > 0) return { text: "!", color: "#b3261e" };
-  if (c.done > 0) return { text: String(c.done), color: "#1b2a4a" };
+  if (c.done > 0) return clampBadge(String(c.done), "#1b2a4a");
   return { text: "", color: "#5f6368" };
+}
+
+// Chrome's toolbar badge truncates past four characters with no ellipsis, so a
+// five-character "12/25" would render as a silent "12/2" and read as a wrong
+// denominator. Four characters fit verbatim; anything longer collapses to an
+// explicit "..." that signals "too big to show" instead of lying.
+function clampBadge(text: string, color: string): { text: string; color: string } {
+  if (text.length <= 4) return { text, color };
+  return { text: "...", color: "#5f6368" };
 }
