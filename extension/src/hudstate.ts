@@ -20,8 +20,12 @@ export type HudKind = "idle" | "running" | "done" | "error" | "empty";
  * from a pending image alone. Every image carrying `data-mt-state` counts into
  * `total` regardless of its value: an unrecognised state still represents
  * coverage the HUD's fraction would otherwise silently drop.
+ *
+ * `queued` is the number of jobs still waiting in the queue. Those images have
+ * no `data-mt-state` yet, so without them the denominator only counts the one
+ * job already at pump and the fraction would climb by shrinking itself.
  */
-export function collectCounts(root: ParentNode, busy: boolean): Counts {
+export function collectCounts(root: ParentNode, busy: boolean, queued = 0): Counts {
   let total = 0;
   let done = 0;
   let error = 0;
@@ -33,7 +37,12 @@ export function collectCounts(root: ParentNode, busy: boolean): Counts {
     else if (state === "error") error++;
     else if (state === "pending") pending = true;
   }
-  return { total, done, error, running: busy || pending };
+  return {
+    total: total + queued,
+    done,
+    error,
+    running: busy || pending || queued > 0,
+  };
 }
 
 export interface HudView {

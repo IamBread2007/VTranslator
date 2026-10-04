@@ -173,6 +173,43 @@ describe("collectCounts", () => {
 
     expect(collectCounts(section, false)).toEqual({ total: 1, done: 0, error: 0, running: true });
   });
+
+  it("counts queued-but-unmarked work into the denominator", () => {
+    // pump() writes data-mt-state only when a job starts, so a batch of N
+    // images spends most of its life with N-1 of them invisible to the DOM
+    // scan. Without the queued count the pill would read "0/1" for a 2-image
+    // page and the fraction would climb by shrinking its own denominator.
+    mkImg("pending");
+
+    expect(collectCounts(document, true, 1)).toEqual({
+      total: 2,
+      done: 0,
+      error: 0,
+      running: true,
+    });
+  });
+
+  it("treats queued work as running even when no image is marked yet", () => {
+    expect(collectCounts(document, false, 3)).toEqual({
+      total: 3,
+      done: 0,
+      error: 0,
+      running: true,
+    });
+  });
+
+  it("defaults the queued count to zero so settled pages are unaffected", () => {
+    mkImg("done");
+    mkImg("done");
+
+    expect(collectCounts(document, false)).toEqual({ total: 2, done: 2, error: 0, running: false });
+    expect(collectCounts(document, false, 0)).toEqual({
+      total: 2,
+      done: 2,
+      error: 0,
+      running: false,
+    });
+  });
 });
 
 describe("TTL_MS", () => {

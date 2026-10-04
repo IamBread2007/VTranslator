@@ -28,7 +28,10 @@ let enqueues = 0;
  * only place that sees both the DOM states and the queue's in-flight work.
  */
 function syncHud(): void {
-  const c = collectCounts(document, queue.size > 0 || queue.inFlight);
+  // queue.size counts jobs whose image carries no data-mt-state yet (pump writes
+  // that attribute only on dispatch), which is what makes the fraction show the
+  // whole batch instead of a denominator that shrinks as work starts.
+  const c = collectCounts(document, queue.size > 0 || queue.inFlight, queue.size);
   // The service worker may not exist yet when a page loads, or may have just
   // been reloaded with the extension; the badge is optional UI garnish, so a
   // dead endpoint must not break the HUD path. Reported at debug level only —
@@ -58,7 +61,6 @@ function syncHud(): void {
 const hoverBtn = document.createElement("button");
 hoverBtn.type = "button";
 hoverBtn.textContent = "Dịch";
-hoverBtn.className = "mt-translate-btn";
 // Position/z-index come from OverlayLayer.styleFor, not here.
 hoverBtn.style.cssText =
   "padding:4px 10px;font:13px sans-serif;background:#1b2a4a;color:#fff;" +
