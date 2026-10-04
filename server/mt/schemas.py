@@ -31,9 +31,10 @@ class Block(BaseModel):
 
 
 class TranslateOptions(BaseModel):
-    # "pt" (Brazilian Portuguese) is manual-only: the script fast-path cannot
-    # tell it apart from "en" because both are Latin, so auto never yields it.
-    source_lang: Literal["auto", "ja", "ko", "zh", "en", "pt"] = "auto"
+    # Latin-script sources ("pt", "es", "id") are manual-only: the script
+    # fast-path cannot separate them from each other or from "en", so auto
+    # never yields them. "es" also covers Mexican Spanish.
+    source_lang: Literal["auto", "ja", "ko", "zh", "en", "pt", "es", "id"] = "auto"
     target_lang: Literal["vi"] = "vi"
     prev_context: list[str] = Field(default_factory=list, max_length=20)
 
@@ -42,6 +43,6 @@ class TranslateResponse(BaseModel):
     width: int
     height: int
     inpainted_png: str
-    resolved_source_lang: Literal["ja", "ko", "zh", "en", "pt"]
+    resolved_source_lang: Literal["ja", "ko", "zh", "en", "pt", "es", "id"]
     blocks: list[Block]
     warnings: list[str]

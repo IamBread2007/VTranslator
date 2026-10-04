@@ -35,6 +35,17 @@ def test_choose_engine_sends_brazilian_portuguese_to_the_latin_model():
     assert choose_engine("paddle", "pt") == "paddle:latin"
 
 
+def test_choose_engine_sends_every_latin_language_to_one_shared_engine():
+    # es (which is what a "Mexican" source means: PaddleOCR has no mx code) and
+    # id resolve to the same latin_PP-OCRv5_mobile_rec as pt. Measured on one
+    # mixed es/id image: identical 0.987 confidence and correct accents for all
+    # three codes, so a single engine key is right and three would load three
+    # copies of one model.
+    for lang in ("es", "id"):
+        assert choose_engine("auto", lang) == "paddle:latin", lang
+        assert choose_engine("paddle", lang) == "paddle:latin", lang
+
+
 def test_classify_scripts_counts():
     ev = classify_scripts("안녕하세요 hello!")
     assert ev["hangul"] == 5 and ev["latin"] == 5 and ev["kana"] == 0

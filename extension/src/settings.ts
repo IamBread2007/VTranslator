@@ -19,7 +19,16 @@ export const DEFAULTS: Settings = {
 const SYNC_KEYS = ["serverUrl", "sourceLang", "targetLang"] as const;
 const LOCAL_KEYS = ["token"] as const;
 
-const SOURCE_LANGS: readonly SourceLang[] = ["auto", "ja", "ko", "zh", "en", "pt"];
+const SOURCE_LANGS: readonly SourceLang[] = [
+  "auto",
+  "ja",
+  "ko",
+  "zh",
+  "en",
+  "pt",
+  "es",
+  "id",
+];
 
 function asStr(v: unknown, fallback: string): string {
   return typeof v === "string" ? v : fallback;

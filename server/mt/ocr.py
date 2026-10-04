@@ -64,15 +64,19 @@ def crop_with_padding(img: Image.Image, box: Box, pad: int = 4) -> Image.Image:
     return img.crop((x0, y0, x1, y1))
 
 
+# Latin-script source languages share one recogniser: PP-OCRv5 maps pt, es and
+# id alike to latin_PP-OCRv5_mobile_rec, so listing them separately would load
+# three copies of one model.
+LATIN_SOURCE_LANGS = ("pt", "es", "id")
+
+
 def choose_engine(ocr_engine: str, lang: str) -> str:
+    if lang in LATIN_SOURCE_LANGS:
+        return "paddle:latin"
     if ocr_engine == "auto":
-        return {
-            "ja": "manga_ocr",
-            "ko": "paddle:korean",
-            "pt": "paddle:latin",
-        }.get(lang, "paddle:v5")
+        return {"ja": "manga_ocr", "ko": "paddle:korean"}.get(lang, "paddle:v5")
     if ocr_engine == "paddle":
-        return {"ko": "paddle:korean", "pt": "paddle:latin"}.get(lang, "paddle:v5")
+        return "paddle:korean" if lang == "ko" else "paddle:v5"
     raise ValueError(f"unknown ocr_engine: {ocr_engine}")
 
 

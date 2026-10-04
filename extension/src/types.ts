@@ -1,9 +1,10 @@
 // API v2 contract — must match server/mt/schemas.py field-for-field.
 
-// "pt" is manual-only: the server's script fast-path cannot separate it from
-// "en" (both Latin), so an auto request never resolves to it.
-export type SourceLang = "auto" | "ja" | "ko" | "zh" | "en" | "pt";
-export type ResolvedLang = "ja" | "ko" | "zh" | "en" | "pt";
+// Latin-script sources ("pt", "es", "id") are manual-only: the server's script
+// fast-path cannot separate them from each other or from "en", so an auto
+// request never resolves to them. "es" also covers Mexican Spanish.
+export type SourceLang = "auto" | "ja" | "ko" | "zh" | "en" | "pt" | "es" | "id";
+export type ResolvedLang = "ja" | "ko" | "zh" | "en" | "pt" | "es" | "id";
 export type FontRole = "dialogue" | "shout" | "narration";
 
 export interface Box {

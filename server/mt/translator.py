@@ -26,6 +26,10 @@ LANG_NAMES = {
     # Brazilian Portuguese: readers of manga in pt-BR expect this variety, so the
     # prompt asks for it rather than for European Portuguese.
     "pt": "Brazilian Portuguese",
+    # Scanlations a reader calls "Mexican" use the Latin American register,
+    # which differs from Castilian in pronouns and slang.
+    "es": "Latin American Spanish",
+    "id": "Indonesian",
     "vi": "Vietnamese",
 }
 
