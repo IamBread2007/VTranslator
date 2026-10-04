@@ -4,6 +4,9 @@
 const LAZY_ATTRS = ["data-src", "data-lazy-src", "data-original", "data-hi-res-src"];
 const MIN_EDGE = 100; // icons/ads live below this; manga pages are far above.
 const STATE_ATTR = "data-mt-state";
+// Set while our own translated blob is on screen, and the only thing that
+// distinguishes it from a page-owned blob (both carry the page's origin).
+const ORIG_SRC_ATTR = "data-mt-original-src";
 
 function largestSrcset(urls: string): string | null {
   let bestUrl: string | null = null;
@@ -26,7 +29,13 @@ export function resolveImageUrl(el: HTMLImageElement): string | null {
   for (const attr of LAZY_ATTRS) candidates.push(el.getAttribute(attr));
   candidates.push(el.getAttribute("src"));
   for (const raw of candidates) {
-    if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) continue; // placeholders and extension-created blobs
+    if (!raw || raw.startsWith("data:")) continue; // inline placeholders
+    // Sites like MangaDex serve reader pages as blob: URLs, so the scheme alone
+    // cannot be a rejection reason. What must never re-enter the queue is the
+    // blob WE swapped in: that element still holds our saved original, which is
+    // the discriminator (an extension-created blob URL carries the page origin,
+    // so it is indistinguishable by origin).
+    if (raw.startsWith("blob:") && el.getAttribute(ORIG_SRC_ATTR)) continue;
     try {
       const url = new URL(raw, document.baseURI).toString();
       // Vector art (payment logos, icons) is rasterized by the page at any px

@@ -54,6 +54,35 @@ describe("resolveImageUrl", () => {
     const el = img({ src: "data:image/gif;base64,R0lGODAQEAAQABAAD" });
     expect(resolveImageUrl(el)).toBeNull();
   });
+
+  it("accepts a page-owned blob: source", () => {
+    // MangaDex serves every reader page as blob:https://mangadex.org/<uuid>, so
+    // rejecting the scheme outright meant no image ever entered the queue.
+    const el = img({ src: "blob:https://mangadex.org/6f1c6f2e-6a2f-4a1e-9d6f-2f4b1c0a9e11" });
+    expect(resolveImageUrl(el)).toBe("blob:https://mangadex.org/6f1c6f2e-6a2f-4a1e-9d6f-2f4b1c0a9e11");
+  });
+
+  it("rejects the blob we swapped in ourselves", () => {
+    // Our own output: the element keeps the source we saved while the blob is on
+    // screen, and re-translating it would recurse into a second pass. The origin
+    // cannot tell the two apart (both are blob:<page origin>), so the saved
+    // source attribute is the discriminator.
+    const el = img({
+      src: "blob:https://mangadex.org/aa11bb22-cc33-dd44-ee55-ff6677889900",
+      "data-mt-original-src": "https://cmdxd98sb0x3yprd.mangadex.network/data/abc/1-x.png",
+    });
+    expect(resolveImageUrl(el)).toBeNull();
+  });
+
+  it("resolves the site URL again once the original is shown", () => {
+    // showOriginal() restores the site's URL, so the element must not stay
+    // locked out by the blob guard.
+    const el = img({
+      src: "https://cmdxd98sb0x3yprd.mangadex.network/data/abc/1-x.png",
+      "data-mt-original-src": "https://cmdxd98sb0x3yprd.mangadex.network/data/abc/1-x.png",
+    });
+    expect(resolveImageUrl(el)).toMatch(/1-x\.png$/);
+  });
 });
 
 describe("isMangaCandidate", () => {
@@ -72,9 +101,9 @@ describe("isMangaCandidate", () => {
     expect(isMangaCandidate(img({ src: "/c.jpg" }))).toBe(true);
   });
 
-  it("rejects data: placeholders and blob: URLs", () => {
+  it("rejects data: placeholders but accepts a page-owned blob", () => {
     expect(isMangaCandidate(img({ src: "data:image/gif;base64,AAA" }))).toBe(false);
-    expect(isMangaCandidate(img({ src: "blob:http://site/uuid" }))).toBe(false);
+    expect(isMangaCandidate(img({ src: "blob:http://site/uuid", width: "800", height: "1200" }))).toBe(true);
   });
 
   it("rejects vector logos (svg)", () => {
