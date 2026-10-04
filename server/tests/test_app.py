@@ -93,6 +93,15 @@ def test_translate_bad_options_422():
     assert _post(c, options="{broken").status_code == 422
 
 
+def test_translate_accepts_explicit_brazilian_portuguese():
+    # pt is manual-only: it must be a valid explicit request even though the
+    # script fast-path can never resolve to it.
+    p = FakePipeline()
+    r = _post(make_client(p), options='{"source_lang":"pt"}')
+    assert r.status_code == 200
+    assert p.opts is not None and p.opts.source_lang == "pt"
+
+
 def test_health_no_auth():
     assert make_client().get("/health").json() == {"ok": True}
 

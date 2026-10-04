@@ -62,6 +62,13 @@ describe("settings storage split", () => {
     expect(s).toEqual(DEFAULTS);
   });
 
+  it("keeps an explicitly selected Brazilian Portuguese source language", async () => {
+    // pt is reachable only by explicit selection (the server's script fast-path
+    // cannot resolve it), so the storage layer must not narrow it back to auto.
+    await chrome.storage.sync.set({ sourceLang: "pt" });
+    expect((await loadSettings()).sourceLang).toBe("pt");
+  });
+
   // Auto-translate was removed: no code path may read or write the old
   // autoSites key, so a profile that still syncs it cannot resurrect it.
   it("never touches autoSites in either storage area", async () => {

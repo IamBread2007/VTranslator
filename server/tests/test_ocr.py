@@ -27,6 +27,14 @@ def test_choose_engine_mapping():
     assert choose_engine("paddle", "ko") == "paddle:korean"
 
 
+def test_choose_engine_sends_brazilian_portuguese_to_the_latin_model():
+    # The chinese-dict probe misreads pt accents (measured: "Vocè nǎo", "Amanhǎ"),
+    # while latin_PP-OCRv5_mobile_rec reads them exactly, so pt must never fall
+    # through to the default paddle:v5 arm.
+    assert choose_engine("auto", "pt") == "paddle:latin"
+    assert choose_engine("paddle", "pt") == "paddle:latin"
+
+
 def test_classify_scripts_counts():
     ev = classify_scripts("안녕하세요 hello!")
     assert ev["hangul"] == 5 and ev["latin"] == 5 and ev["kana"] == 0

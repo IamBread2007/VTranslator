@@ -66,9 +66,13 @@ def crop_with_padding(img: Image.Image, box: Box, pad: int = 4) -> Image.Image:
 
 def choose_engine(ocr_engine: str, lang: str) -> str:
     if ocr_engine == "auto":
-        return {"ja": "manga_ocr", "ko": "paddle:korean"}.get(lang, "paddle:v5")
+        return {
+            "ja": "manga_ocr",
+            "ko": "paddle:korean",
+            "pt": "paddle:latin",
+        }.get(lang, "paddle:v5")
     if ocr_engine == "paddle":
-        return "paddle:korean" if lang == "ko" else "paddle:v5"
+        return {"ko": "paddle:korean", "pt": "paddle:latin"}.get(lang, "paddle:v5")
     raise ValueError(f"unknown ocr_engine: {ocr_engine}")
 
 
@@ -198,6 +202,9 @@ def resolve_source_lang(
 PADDLE_ARGS = {
     "paddle:v5": {"lang": "ch"},
     "paddle:korean": {"lang": "korean"},
+    # Portuguese resolves to latin_PP-OCRv5_mobile_rec, which reads pt accents
+    # exactly; the chinese-dict probe misreads them ("Vocè nǎo", "Amanhǎ").
+    "paddle:latin": {"lang": "pt"},
 }
 
 # Server models cost 4-15s per vertical bubble crop on CPU (measured 2026-10-01);

@@ -23,6 +23,9 @@ LANG_NAMES = {
     "ko": "Korean",
     "zh": "Chinese",
     "en": "English",
+    # Brazilian Portuguese: readers of manga in pt-BR expect this variety, so the
+    # prompt asks for it rather than for European Portuguese.
+    "pt": "Brazilian Portuguese",
     "vi": "Vietnamese",
 }
 

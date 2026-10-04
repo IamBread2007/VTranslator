@@ -1,7 +1,9 @@
 // API v2 contract — must match server/mt/schemas.py field-for-field.
 
-export type SourceLang = "auto" | "ja" | "ko" | "zh" | "en";
-export type ResolvedLang = "ja" | "ko" | "zh" | "en";
+// "pt" is manual-only: the server's script fast-path cannot separate it from
+// "en" (both Latin), so an auto request never resolves to it.
+export type SourceLang = "auto" | "ja" | "ko" | "zh" | "en" | "pt";
+export type ResolvedLang = "ja" | "ko" | "zh" | "en" | "pt";
 export type FontRole = "dialogue" | "shout" | "narration";
 
 export interface Box {
