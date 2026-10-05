@@ -101,7 +101,7 @@ export async function composePage(
 
     const r = block.render_box;
     ctx.font = `${weight} ${fit.fontPx}px "${family}"`;
-    const lineH = fit.fontPx * 1.2;
+    const lineH = fit.fontPx * fit.lineHeight;
     let y = r.y + (r.h - fit.lines.length * lineH) / 2 + fit.fontPx;
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
