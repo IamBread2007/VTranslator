@@ -96,6 +96,10 @@ export async function composePage(
       minPx,
       maxPx,
       lineHeight: 1.2,
+      // A speech balloon's box is its bounding box, so the corners are outline:
+      // text wrapped to the full width there spills over the balloon edge.
+      // Free text sits on artwork and really does own its whole rectangle.
+      shape: block.kind === "text_bubble" ? "ellipse" : "rect",
     });
     if (fit.overflow) opts.onOverflow?.(block.id, minPx);
 
