@@ -155,13 +155,21 @@ describe("collectCounts", () => {
     expect(collectCounts(document, false)).toEqual({ total: 1, done: 0, error: 0, running: false });
   });
 
-  it("ignores images with no state attribute and elements that are not images", () => {
+  it("ignores elements with no state attribute", () => {
     document.body.appendChild(document.createElement("img"));
+    document.body.appendChild(document.createElement("div"));
+
+    expect(collectCounts(document, false)).toEqual({ total: 0, done: 0, error: 0, running: false });
+  });
+
+  it("counts a background-page div that carries a state", () => {
+    // Readers that paint pages as a background-image carry data-mt-state on
+    // the div itself, so the HUD must not restrict the scan to img tags.
     const div = document.createElement("div");
     div.setAttribute("data-mt-state", "done");
     document.body.appendChild(div);
 
-    expect(collectCounts(document, false)).toEqual({ total: 0, done: 0, error: 0, running: false });
+    expect(collectCounts(document, false)).toEqual({ total: 1, done: 1, error: 0, running: false });
   });
 
   it("scans the root it is handed, not only the document", () => {

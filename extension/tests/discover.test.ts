@@ -178,3 +178,91 @@ describe("isVisibleCandidate", () => {
     expect(isVisibleCandidate(rendered(img({ src: "/bar.jpg" }), 900, 80))).toBe(false);
   });
 });
+
+function bgDiv(bg?: string): HTMLDivElement {
+  const el = document.createElement("div");
+  if (bg) el.style.backgroundImage = bg;
+  document.body.appendChild(el);
+  return el;
+}
+
+function renderedEl(el: HTMLElement, w: number, h: number): HTMLElement {
+  el.getBoundingClientRect = () =>
+    ({ x: 0, y: 0, width: w, height: h, top: 0, left: 0, right: w, bottom: h, toJSON: () => ({}) }) as DOMRect;
+  return el;
+}
+
+describe("resolveImageUrl on background-image elements", () => {
+  it("rejects a div with no inline background-image", () => {
+    expect(resolveImageUrl(bgDiv())).toBeNull();
+  });
+
+  it("rejects a data: background placeholder", () => {
+    expect(resolveImageUrl(bgDiv('url("data:image/gif;base64,R0lGOD")'))).toBeNull();
+  });
+
+  it("returns null on first sight of an http background, then qualifies once the site replaces it", () => {
+    // The first value may be a pre-load placeholder bitmap; only a site-driven
+    // replacement proves a real page image is being served.
+    const el = bgDiv('url("https://reader.example/preload.png")');
+    expect(resolveImageUrl(el)).toBeNull();
+
+    el.style.backgroundImage = 'url("https://reader.example/page-001.jpg")';
+    expect(resolveImageUrl(el)).toBe("https://reader.example/page-001.jpg");
+  });
+
+  it("rejects an http background the site never replaced after the baseline was recorded", () => {
+    const el = bgDiv('url("https://reader.example/preload.png")');
+    expect(resolveImageUrl(el)).toBeNull(); // baseline recorded
+    expect(resolveImageUrl(el)).toBeNull(); // unchanged → still a placeholder
+  });
+
+  it("accepts a page-owned blob: background on first sight", () => {
+    const el = bgDiv('url("blob:https://comic.pixiv.net/26f59ef2-abc")');
+    expect(resolveImageUrl(el)).toBe("blob:https://comic.pixiv.net/26f59ef2-abc");
+  });
+
+  it("rejects the background blob we swapped in ourselves", () => {
+    const el = bgDiv('url("blob:https://comic.pixiv.net/our-translation")');
+    el.setAttribute("data-mt-original-bg", 'url("blob:https://comic.pixiv.net/page-1")');
+    expect(resolveImageUrl(el)).toBeNull();
+  });
+
+  it("leaves <img> resolution byte-identical (img src still resolves)", () => {
+    expect(resolveImageUrl(img({ src: "/manga/page-001.jpg" }))).toMatch(/\/manga\/page-001\.jpg$/);
+  });
+});
+
+describe("isMangaCandidate on background-image elements", () => {
+  it("rejects a background div without a resolvable URL", () => {
+    expect(isMangaCandidate(bgDiv())).toBe(false);
+  });
+
+  it("accepts a blob: background div rendered at page size", () => {
+    const el = renderedEl(bgDiv('url("blob:https://comic.pixiv.net/page-0")'), 634, 751);
+    expect(isMangaCandidate(el)).toBe(true);
+  });
+
+  it("rejects a blob: background div rendered below the minimum edge", () => {
+    const el = renderedEl(bgDiv('url("blob:https://comic.pixiv.net/icon")'), 48, 48);
+    expect(isMangaCandidate(el)).toBe(false);
+  });
+
+  it("rejects a background div already done", () => {
+    const el = renderedEl(bgDiv('url("blob:https://comic.pixiv.net/page-1")'), 634, 751);
+    el.setAttribute("data-mt-state", "done");
+    expect(isMangaCandidate(el)).toBe(false);
+  });
+});
+
+describe("TranslateQueue with background elements", () => {
+  it("queues, dedupes and dequeues a background div", () => {
+    const el = bgDiv('url("blob:https://comic.pixiv.net/page-2")');
+    const q = new TranslateQueue();
+    q.enqueue(el);
+    q.enqueue(el); // same node + same URL → deduped
+    expect(q.size).toBe(1);
+    expect(q.dequeue()).toBe(el);
+    q.settle();
+  });
+});

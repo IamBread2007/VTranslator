@@ -30,9 +30,11 @@ export function collectCounts(root: ParentNode, busy: boolean, queued = 0): Coun
   let done = 0;
   let error = 0;
   let pending = false;
-  for (const img of root.querySelectorAll("img[data-mt-state]")) {
+  // Selector is not limited to img: background-carried pages (Pixiv) carry the
+  // same data-mt-state on a div.
+  for (const el of root.querySelectorAll("[data-mt-state]")) {
     total++;
-    const state = img.getAttribute("data-mt-state");
+    const state = el.getAttribute("data-mt-state");
     if (state === "done") done++;
     else if (state === "error") error++;
     else if (state === "pending") pending = true;

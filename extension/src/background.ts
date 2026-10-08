@@ -160,18 +160,39 @@ chrome.runtime.onMessage.addListener((msg: IncomingMessage, sender, sendResponse
   return true; // async response
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+const MENU_ID = "mt-translate-image";
+
+/**
+ * Register the right-click entry, tolerating a menu that already exists.
+ *
+ * Service workers restart freely and `onInstalled` fires for install, update
+ * and chrome_update, so this routinely runs against a profile that already has
+ * the item: menus outlive the worker that created them. `removeAll` is
+ * asynchronous, so a bare `create` can still land on a surviving id and fail
+ * with "Cannot create item with duplicate id".
+ *
+ * The callback is not optional: an API call that sets `lastError` without
+ * reading it is reported by Chrome as an unchecked runtime error, which is
+ * noise the user cannot act on and which would otherwise hide real failures.
+ */
+function registerContextMenu(): void {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "mt-translate-image",
-      title: "Dịch ảnh này",
-      contexts: ["image"],
-    });
+    chrome.contextMenus.create(
+      { id: MENU_ID, title: "Dịch ảnh này", contexts: ["image"] },
+      () => {
+        const err = chrome.runtime.lastError;
+        // A duplicate means the item is already present, which is the desired
+        // end state: report it and move on rather than failing the listener.
+        if (err) console.warn(`MT context menu: ${err.message}`);
+      },
+    );
   });
-});
+}
+
+chrome.runtime.onInstalled.addListener(registerContextMenu);
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== "mt-translate-image" || !info.srcUrl || !tab?.id) return;
+  if (info.menuItemId !== MENU_ID || !info.srcUrl || !tab?.id) return;
   // Enqueue in the content script; never bypass the sequential queue.
   chrome.tabs
     .sendMessage(tab.id, { type: "mt-translate-url", url: info.srcUrl })

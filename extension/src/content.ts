@@ -1,7 +1,21 @@
 // Content script: candidate discovery, single-file translate queue, image swap.
-import { isMangaCandidate, isVisibleCandidate, resolveImageUrl, TranslateQueue } from "./discover";
+import {
+  isMangaCandidate,
+  isVisibleCandidate,
+  resolveImageUrl,
+  TranslateQueue,
+} from "./discover";
 import { composePage } from "./render";
-import { STATE, ORIG_SRC, ORIG_SRCSET, onSiteSourceSwap } from "./imgsrc";
+import {
+  STATE,
+  ORIG_SRC,
+  ORIG_SRCSET,
+  applyBackgroundSwap,
+  restoreOriginalBackground,
+  reapplyTranslatedBackground,
+  onSiteSourceSwap,
+  takeOwnStyleWrites,
+} from "./imgsrc";
 import { badgeFor, collectCounts, emptyView, summarize, TTL_MS } from "./hudstate";
 import { createHud } from "./hud";
 import { OverlayLayer } from "./overlay";
@@ -10,7 +24,7 @@ import type { TranslateResponse } from "./types";
 const MAX_CONTEXT = 20;
 
 const queue = new TranslateQueue();
-const blobs = new Map<HTMLImageElement, string>();
+const blobs = new Map<Element, string>();
 const translations: string[] = []; // rolling context, completed pages only
 
 /* ---------------- UI ---------------- */
@@ -66,7 +80,7 @@ hoverBtn.style.cssText =
   "padding:4px 10px;font:13px sans-serif;background:#1b2a4a;color:#fff;" +
   "border:0;border-radius:4px;cursor:pointer;opacity:.92";
 
-let hoverAnchor: HTMLImageElement | null = null;
+let hoverAnchor: Element | null = null;
 
 function clearHover(): void {
   if (!hoverAnchor) return;
@@ -74,7 +88,7 @@ function clearHover(): void {
   hoverAnchor = null;
 }
 
-function showHover(el: HTMLImageElement): void {
+function showHover(el: Element): void {
   if (el.getAttribute(STATE)) return; // a settled or in-flight image speaks through its own chip/ring
   if (hoverAnchor === el) return;
   clearHover();
@@ -87,14 +101,14 @@ hoverBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   const el = hoverAnchor;
   clearHover(); // the button must not linger over the image the user just clicked
-  if (el) enqueue(el, { priority: true });
+  if (el instanceof Element) enqueue(el, { priority: true });
 });
 
 // Per-image pending rings: a fresh node per image so several images can show
 // "being worked on" at once instead of one shared indicator.
-const rings = new Map<HTMLImageElement, HTMLElement>();
+const rings = new Map<Element, HTMLElement>();
 
-function showRing(el: HTMLImageElement): void {
+function showRing(el: Element): void {
   // The ring takes the slot the hover button may be holding on this image.
   if (hoverAnchor === el) clearHover();
   let node = rings.get(el);
@@ -106,12 +120,12 @@ function showRing(el: HTMLImageElement): void {
   layer.cover(el, node);
 }
 
-function dropRing(el: HTMLImageElement): void {
+function dropRing(el: Element): void {
   if (!rings.delete(el)) return;
   layer.clear(el);
 }
 
-function flashDone(el: HTMLImageElement): void {
+function flashDone(el: Element): void {
   const chip = document.createElement("span");
   chip.textContent = "✓";
   // hud.ts only styles whole pills (`.mt-hud--ok` alone has no text colour, no
@@ -124,9 +138,9 @@ function flashDone(el: HTMLImageElement): void {
 
 // Error chips: one node per image, kept until the user retries — unlike the
 // done tick, an error must not vanish while nobody has looked at it.
-const errorChips = new Map<HTMLImageElement, HTMLElement>();
+const errorChips = new Map<Element, HTMLElement>();
 
-function showErrorChip(el: HTMLImageElement): void {
+function showErrorChip(el: Element): void {
   dropErrorChip(el); // never stack a second chip on an already-flagged image
   const chip = document.createElement("span");
   chip.textContent = "Lỗi — bấm để thử lại";
@@ -143,13 +157,13 @@ function showErrorChip(el: HTMLImageElement): void {
   layer.set(el, chip);
 }
 
-function dropErrorChip(el: HTMLImageElement): void {
+function dropErrorChip(el: Element): void {
   if (!errorChips.delete(el)) return;
   layer.clear(el);
 }
 
 /** Drop every anchor we own for an image, e.g. one the page just removed. */
-function dropAnchors(el: HTMLImageElement): void {
+function dropAnchors(el: Element): void {
   rings.delete(el);
   errorChips.delete(el);
   if (hoverAnchor === el) hoverAnchor = null;
@@ -159,8 +173,10 @@ function dropAnchors(el: HTMLImageElement): void {
 document.addEventListener(
   "mouseover",
   (e) => {
+    // The event target on background-carried readers is the page div itself,
+    // so the img instanceof check cannot be the gate here.
     const el = e.target;
-    if (el instanceof HTMLImageElement && isMangaCandidate(el)) showHover(el);
+    if (el instanceof Element && isMangaCandidate(el)) showHover(el);
   },
   true,
 );
@@ -168,7 +184,7 @@ document.addEventListener(
   "focusin",
   (e) => {
     const el = e.target;
-    if (el instanceof HTMLImageElement && isMangaCandidate(el)) {
+    if (el instanceof Element && isMangaCandidate(el)) {
       el.setAttribute("tabindex", "0");
       showHover(el);
     }
@@ -180,12 +196,23 @@ document.addEventListener("mouseout", (e) => {
   // anchored as a sibling, not a child), so without this guard the button would
   // be destroyed the moment the cursor reaches it and could never be clicked.
   if (e.relatedTarget instanceof Node && hoverBtn.contains(e.relatedTarget)) return;
-  if (e.target === hoverBtn || e.target instanceof HTMLImageElement) clearHover();
+  // Moving within a hovered element (e.g. into a child of a background page
+  // div) must not dismiss the button either.
+  if (e.relatedTarget instanceof Node && hoverAnchor?.contains(e.relatedTarget)) return;
+  if (e.target === hoverBtn || e.target === hoverAnchor || e.target instanceof HTMLImageElement) {
+    clearHover();
+  }
 });
 
 /* ---------------- original view (hold click / Alt+O) ---------------- */
 
-function showOriginal(el: HTMLImageElement): void {
+function showOriginal(el: Element): void {
+  if (el instanceof HTMLElement && !(el instanceof HTMLImageElement)) {
+    if (el.getAttribute(STATE) !== "done") return;
+    restoreOriginalBackground(el);
+    return;
+  }
+  if (!(el instanceof HTMLImageElement)) return;
   const orig = el.getAttribute(ORIG_SRC);
   if (!orig || el.getAttribute(STATE) !== "done") return;
   const current = blobs.get(el);
@@ -194,7 +221,12 @@ function showOriginal(el: HTMLImageElement): void {
   if (origSet) el.setAttribute("srcset", origSet);
   if (current) el.dataset.mtHiddenBlob = current;
 }
-function restoreTranslated(el: HTMLImageElement): void {
+function restoreTranslated(el: Element): void {
+  if (el instanceof HTMLElement && !(el instanceof HTMLImageElement)) {
+    reapplyTranslatedBackground(el);
+    return;
+  }
+  if (!(el instanceof HTMLImageElement)) return;
   const hidden = el.dataset.mtHiddenBlob;
   if (!hidden) return;
   el.setAttribute("src", hidden);
@@ -203,29 +235,29 @@ function restoreTranslated(el: HTMLImageElement): void {
 let holdTimer: number | undefined;
 document.addEventListener("mousedown", (e) => {
   const el = e.target;
-  if (el instanceof HTMLImageElement && el.getAttribute(STATE) === "done") {
+  if (el instanceof Element && el.getAttribute(STATE) === "done") {
     holdTimer = window.setTimeout(() => showOriginal(el), 400);
   }
 });
 document.addEventListener("mouseup", (e) => {
   window.clearTimeout(holdTimer);
   const el = e.target;
-  if (el instanceof HTMLImageElement) restoreTranslated(el);
+  if (el instanceof Element) restoreTranslated(el);
 });
 document.addEventListener("keydown", (e) => {
   if (!e.altKey || (e.key !== "o" && e.key !== "O")) return;
   const el = document.activeElement;
-  if (el instanceof HTMLImageElement) showOriginal(el);
+  if (el instanceof Element) showOriginal(el);
 });
 document.addEventListener("keyup", (e) => {
   if (e.key !== "o" && e.key !== "O") return;
   const el = document.activeElement;
-  if (el instanceof HTMLImageElement) restoreTranslated(el);
+  if (el instanceof Element) restoreTranslated(el);
 });
 
 /* ---------------- queue + dispatch ---------------- */
 
-function enqueue(el: HTMLImageElement, opts: { priority?: boolean } = {}): void {
+function enqueue(el: Element, opts: { priority?: boolean } = {}): void {
   if (el.getAttribute(STATE) === "pending" || el.getAttribute(STATE) === "done") return;
   if (!isMangaCandidate(el) || !isVisibleCandidate(el)) return;
   const queuedBefore = queue.size;
@@ -261,7 +293,7 @@ async function pump(): Promise<void> {
   }
 }
 
-async function translateOne(el: HTMLImageElement): Promise<void> {
+async function translateOne(el: Element): Promise<void> {
   const url = resolveImageUrl(el);
   if (!url) throw new Error("no image URL");
   // prevContext is read NOW, immediately before dispatch, so page N+1 always
@@ -280,16 +312,23 @@ async function translateOne(el: HTMLImageElement): Promise<void> {
   });
   const objectUrl = URL.createObjectURL(blob);
 
-  el.setAttribute(ORIG_SRC, url);
-  const origSrcset = el.getAttribute("srcset");
-  if (origSrcset) el.setAttribute(ORIG_SRCSET, origSrcset);
-  el.removeAttribute("srcset"); // lazy loaders must not override our swap
-  el.removeAttribute("data-src");
+  if (el instanceof HTMLImageElement) {
+    el.setAttribute(ORIG_SRC, url);
+    const origSrcset = el.getAttribute("srcset");
+    if (origSrcset) el.setAttribute(ORIG_SRCSET, origSrcset);
+    el.removeAttribute("srcset"); // lazy loaders must not override our swap
+    el.removeAttribute("data-src");
+  }
+  if (el instanceof HTMLElement && !(el instanceof HTMLImageElement)) {
+    // Only the background-image property is written: the same inline style
+    // carries scroll-snap and direction values the reader needs for paging.
+    applyBackgroundSwap(el, objectUrl);
+  }
 
   const prevBlob = blobs.get(el);
   if (prevBlob) URL.revokeObjectURL(prevBlob);
   blobs.set(el, objectUrl);
-  el.setAttribute("src", objectUrl);
+  if (el instanceof HTMLImageElement) el.setAttribute("src", objectUrl);
 
   for (const block of resp.blocks) translations.push(block.translation);
   while (translations.length > MAX_CONTEXT) translations.shift();
@@ -309,7 +348,7 @@ document.addEventListener("keydown", (e) => {
   triggerNearby();
 });
 
-function revokeEl(el: HTMLImageElement): void {
+function revokeEl(el: Element): void {
   const blob = blobs.get(el);
   if (blob) {
     URL.revokeObjectURL(blob);
@@ -318,9 +357,20 @@ function revokeEl(el: HTMLImageElement): void {
 }
 
 const mo = new MutationObserver((records) => {
+  // Snapshot taken before inspection: our own style writes were recorded
+  // synchronously and must be told apart from a site swap in this batch.
+  const ownWrites = takeOwnStyleWrites();
   for (const rec of records) {
     if (rec.type === "attributes") {
       const el = rec.target;
+      if (!(el instanceof Element)) continue;
+      if (el instanceof HTMLElement && !(el instanceof HTMLImageElement) && rec.attributeName === "style") {
+        if (ownWrites.has(el)) continue; // our swap/show-original, not a site change
+        // The site replaced a background it no longer wants translated. Same
+        // rule as the img path: clear bookkeeping, never re-queue.
+        if (onSiteSourceSwap(el, revokeEl)) dropErrorChip(el);
+        continue;
+      }
       if (!(el instanceof HTMLImageElement)) continue;
       const next = el.getAttribute(rec.attributeName ?? "src") ?? "";
       // Our own swap produces blob: URLs; ignore it to avoid feedback loops.
@@ -330,7 +380,7 @@ const mo = new MutationObserver((records) => {
       if (onSiteSourceSwap(el, revokeEl)) dropErrorChip(el); // the retry offer pointed at state that no longer exists
     } else if (rec.type === "childList") {
       for (const node of rec.removedNodes) {
-        if (!(node instanceof HTMLImageElement)) continue;
+        if (!(node instanceof Element)) continue;
         revokeEl(node);
         queue.remove(node);
         dropAnchors(node);
@@ -340,17 +390,21 @@ const mo = new MutationObserver((records) => {
 });
 mo.observe(document.documentElement, {
   attributes: true,
-  attributeFilter: ["src", "srcset"],
+  attributeFilter: ["src", "srcset", "style"],
   childList: true,
   subtree: true,
 });
 
 /** Queue every un-translated candidate within one viewport of the scroll. */
 function enqueueNearby(): void {
-  for (const img of document.querySelectorAll("img")) {
-    if (!isMangaCandidate(img)) continue;
-    const r = img.getBoundingClientRect();
-    if (r.bottom >= -1500 && r.top <= window.innerHeight + 1500) enqueue(img);
+  // Background-carried pages have no dedicated tag and carry no state
+  // attributes before their first translation, so the selector also matches
+  // any element whose inline style declares background-image — the only place
+  // a page bitmap can live for the paths this extension reads.
+  for (const el of document.querySelectorAll("img, [style*=\"background-image\"]")) {
+    if (!isMangaCandidate(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.bottom >= -1500 && r.top <= window.innerHeight + 1500) enqueue(el);
   }
 }
 
@@ -367,11 +421,11 @@ function triggerNearby(): void {
 
 /** Every image in the error state, re-queued through the normal enqueue path. */
 function retryErrors(): void {
-  for (const img of document.querySelectorAll("img")) {
-    if (img.getAttribute(STATE) === "error") {
-      img.removeAttribute(STATE);
-      dropErrorChip(img); // the offer is redeemed now; the ring will take its slot
-      enqueue(img);
+  for (const el of document.querySelectorAll("[data-mt-state]")) {
+    if (el.getAttribute(STATE) === "error") {
+      el.removeAttribute(STATE);
+      dropErrorChip(el); // the offer is redeemed now; the ring will take its slot
+      enqueue(el);
     }
   }
 }
@@ -390,14 +444,15 @@ chrome.runtime.onMessage.addListener(
       triggerNearby();
     } else if (msg.type === "mt-translate-url" && msg.url) {
       // Context menu: enqueue the clicked image in the same queue.
-      for (const img of document.querySelectorAll("img")) {
-        const canonical = resolveImageUrl(img);
-        if (canonical === msg.url || img.src === msg.url) {
-          if (img.getAttribute(STATE) === "done" || img.getAttribute(STATE) === "pending") {
+      for (const el of document.querySelectorAll("img, [data-mt-state]")) {
+        const canonical = resolveImageUrl(el);
+        const rawSrc = el instanceof HTMLImageElement ? el.src : null;
+        if (canonical === msg.url || rawSrc === msg.url) {
+          if (el.getAttribute(STATE) === "done" || el.getAttribute(STATE) === "pending") {
             sendResponse({ ok: false, reason: "already" });
             return undefined;
           }
-          enqueue(img, { priority: true });
+          enqueue(el, { priority: true });
           sendResponse({ ok: true });
           return undefined;
         }

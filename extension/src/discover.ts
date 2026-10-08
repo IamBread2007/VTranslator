@@ -7,6 +7,21 @@ const STATE_ATTR = "data-mt-state";
 // Set while our own translated blob is on screen, and the only thing that
 // distinguishes it from a page-owned blob (both carry the page's origin).
 const ORIG_SRC_ATTR = "data-mt-original-src";
+// Same discriminator for background-carried pages (see resolveBackgroundUrl).
+const ORIG_BG_ATTR = "data-mt-original-bg";
+// Readers like Pixiv paint each page as a div's background-image, so candidate
+// discovery must accept non-img elements that carry a real background URL.
+const BG_URL = /url\(["']?([^"')]+)["']?\)/;
+// Baseline of each element's inline background-image, recorded at first
+// evaluation. A background URL the site has not replaced since we first saw it
+// is indistinguishable from a not-yet-real placeholder (Pixiv parks a blank
+// http image on the div until its decoder publishes the real bitmap), so an
+// http(s) background qualifies only after the site itself changed it. A blob:
+// URL always qualifies: it can only exist after the site decoded the real
+// page. Consequence: a site serving its final page image directly as an
+// unchanged http URL is not discoverable — that limitation is inherent to the
+// rule, not a bug.
+const firstSeenBG = new WeakMap<Element, string>();
 
 function largestSrcset(urls: string): string | null {
   let bestUrl: string | null = null;
@@ -23,8 +38,42 @@ function largestSrcset(urls: string): string | null {
   return bestUrl;
 }
 
+/** The element's background-image URL, or null when it has none we can use. */
+function resolveBackgroundUrl(el: Element): string | null {
+  // Inline style first: that is where readers put the page bitmap, and it is
+  // the value we would have saved a swap from. getComputedStyle also covers
+  // stylesheet-carried backgrounds, but a candidate whose URL lives only in a
+  // stylesheet cannot be swapped without clobbering the class it came from, so
+  // it is deliberately not a candidate.
+  const raw = el instanceof HTMLElement ? el.style.backgroundImage : "";
+  const m = BG_URL.exec(raw || "");
+  if (!m) return null;
+  const url = m[1].trim();
+  if (!url || url.startsWith("data:")) return null; // inline placeholders
+  // Same guard as the img path: our own blob must never re-enter the queue.
+  if (url.startsWith("blob:") && el.getAttribute(ORIG_BG_ATTR)) return null;
+  try {
+    const resolved = new URL(url, document.baseURI).toString();
+    if (resolved.startsWith("blob:")) return resolved;
+    if (!/^https?:/.test(resolved)) return null;
+    const baseline = firstSeenBG.get(el);
+    if (baseline === undefined) {
+      firstSeenBG.set(el, raw);
+      // First sight of an http background: it may still be the pre-load
+      // placeholder, and an unchanged value cannot be distinguished from one,
+      // so it does not qualify until the site replaces it.
+      return null;
+    }
+    if (raw === baseline) return null; // unchanged since first sight
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
 /** Best real image URL for an element, or null for placeholders. */
-export function resolveImageUrl(el: HTMLImageElement): string | null {
+export function resolveImageUrl(el: Element): string | null {
+  if (!(el instanceof HTMLImageElement)) return resolveBackgroundUrl(el);
   const candidates: (string | null)[] = [largestSrcset(el.getAttribute("srcset") || "")];
   for (const attr of LAZY_ATTRS) candidates.push(el.getAttribute(attr));
   candidates.push(el.getAttribute("src"));
@@ -59,11 +108,18 @@ function knownSize(el: HTMLImageElement): { w: number; h: number } | null {
   return w > 0 && h > 0 ? { w, h } : null;
 }
 
-export function isMangaCandidate(el: HTMLImageElement): boolean {
+export function isMangaCandidate(el: Element): boolean {
   if (el.getAttribute(STATE_ATTR) === "pending" || el.getAttribute(STATE_ATTR) === "done") {
     return false;
   }
   if (!resolveImageUrl(el)) return false;
+  if (!(el instanceof HTMLImageElement)) {
+    // A background element has no intrinsic size, so the rendered box is the
+    // only size signal available, and the same edge also keeps small decorated
+    // divs (buttons, separators) out of the queue.
+    const r = el.getBoundingClientRect();
+    return r.width >= MIN_EDGE && r.height >= MIN_EDGE;
+  }
   const size = knownSize(el);
   if (!size) return true; // unloaded lazy image: size decides at dispatch time
   return Math.max(size.w, size.h) >= MIN_EDGE && Math.min(size.w, size.h) >= MIN_EDGE;
@@ -74,13 +130,13 @@ export function isMangaCandidate(el: HTMLImageElement): boolean {
  * placeholders have a 0x0 rect. Without this check they consume the
  * sequential queue and starve the images actually on screen.
  */
-export function isVisibleCandidate(el: HTMLImageElement): boolean {
+export function isVisibleCandidate(el: Element): boolean {
   const r = el.getBoundingClientRect();
   return r.width >= MIN_EDGE && r.height >= MIN_EDGE;
 }
 
 interface Entry {
-  el: HTMLImageElement;
+  el: Element;
   url: string;
   priority: boolean;
 }
@@ -97,7 +153,7 @@ export class TranslateQueue {
     return this.current !== null;
   }
 
-  enqueue(el: HTMLImageElement, opts: { priority?: boolean } = {}): void {
+  enqueue(el: Element, opts: { priority?: boolean } = {}): void {
     const url = resolveImageUrl(el);
     if (!url) return;
     // Dedupe key is (element, canonical URL): the same node observed twice is
@@ -109,7 +165,7 @@ export class TranslateQueue {
   }
 
   /** Oldest job (DOM order), or undefined while a job is in flight. */
-  dequeue(): HTMLImageElement | undefined {
+  dequeue(): Element | undefined {
     if (this.current || this.entries.length === 0) return undefined;
     this.entries.sort((a, b) => {
       if (a.priority !== b.priority) return a.priority ? -1 : 1;
@@ -127,7 +183,7 @@ export class TranslateQueue {
   }
 
   /** Drop a queued entry (element left the DOM or failed re-evaluation). */
-  remove(el: HTMLImageElement): void {
+  remove(el: Element): void {
     this.entries = this.entries.filter((e) => e.el !== el);
     if (this.current?.el === el) this.current = null;
   }
