@@ -1,4 +1,5 @@
 import type { SourceLang } from "./types";
+import { narrowReaderModes, type ReaderMode } from "./sites";
 
 // Token lives only in chrome.storage.local: sync would replicate it across
 // Google-account devices. serverUrl is user-picked, not a credential.
@@ -7,6 +8,8 @@ export interface Settings {
   sourceLang: SourceLang;
   targetLang: string;
   token: string;
+  /** hostname -> reader layout, for sites the user declared a comic reader. */
+  readerModes: Record<string, ReaderMode>;
 }
 
 export const DEFAULTS: Settings = {
@@ -14,9 +17,10 @@ export const DEFAULTS: Settings = {
   sourceLang: "auto",
   targetLang: "vi",
   token: "",
+  readerModes: {},
 };
 
-const SYNC_KEYS = ["serverUrl", "sourceLang", "targetLang"] as const;
+const SYNC_KEYS = ["serverUrl", "sourceLang", "targetLang", "readerModes"] as const;
 const LOCAL_KEYS = ["token"] as const;
 
 const SOURCE_LANGS: readonly SourceLang[] = [
@@ -48,6 +52,7 @@ function narrow(raw: Record<string, unknown>): Settings {
     sourceLang: asLang(raw.sourceLang),
     targetLang: asStr(raw.targetLang, DEFAULTS.targetLang),
     token: asStr(raw.token, DEFAULTS.token),
+    readerModes: narrowReaderModes(raw.readerModes),
   };
 }
 
@@ -64,6 +69,7 @@ export async function saveSettings(s: Settings): Promise<void> {
     serverUrl: s.serverUrl,
     sourceLang: s.sourceLang,
     targetLang: s.targetLang,
+    readerModes: s.readerModes,
   });
   await chrome.storage.local.set({ token: s.token });
 }

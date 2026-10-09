@@ -23,6 +23,26 @@
       }
       #status.ok { background: #e6f4ea; }
       #status.err { background: #fce8e6; }
+      fieldset {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 0.75rem;
+        margin: 0 0 1rem;
+      }
+      legend { font-weight: 600; padding: 0 0.35rem; }
+      .hint { color: #555; font-size: 0.875rem; margin: 0.25rem 0 0.75rem; }
+      .modes { list-style: none; margin: 0; padding: 0; }
+      .modes li {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.3rem 0;
+        flex-wrap: wrap;
+      }
+      .modes .host { font-family: ui-monospace, monospace; min-width: 14rem; }
+      .modes .examples { color: #666; font-size: 0.8125rem; }
+      .addrow { display: flex; gap: 0.5rem; align-items: flex-end; margin-top: 0.75rem; }
+      .addrow label { display: flex; flex-direction: column; gap: 0.25rem; }
     </style>
   </head>
   <body>
@@ -55,6 +75,29 @@
       </div>
       <button type="button" id="check">Kiểm tra kết nối</button>
       <button type="submit">Lưu</button>
+    </form>
+
+    <form id="modesForm">
+      <fieldset>
+        <legend>Cách đọc của từng trang</legend>
+        <p class="hint">
+          Alt+T chỉ dịch ảnh đang ở gần màn hình. Với trang đọc truyện, các trang
+          được xếp theo kiểu riêng nên có thể nằm ngoài vùng đó — khai báo cách
+          đọc để Alt+T dịch được cả chương. Trang không khai báo (mặc định) vẫn
+          dùng cách cũ, nên ảnh trong chat và mạng xã hội không bị ảnh hưởng.
+        </p>
+        <ul class="modes" id="modes"></ul>
+        <div class="addrow">
+          <label for="newHost">Thêm trang
+            <input id="newHost" type="text" placeholder="mangadex.org" />
+          </label>
+          <label for="newMode">Cách đọc
+            <select id="newMode"></select>
+          </label>
+          <button type="button" id="addMode">Thêm</button>
+          <button type="button" id="resetModes">Xoá hết</button>
+        </div>
+      </fieldset>
     </form>
     <div id="status" role="status" aria-live="polite"></div>
     <script type="module" src="options.js"></script>

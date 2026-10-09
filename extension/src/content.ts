@@ -6,11 +6,15 @@ import {
   TranslateQueue,
 } from "./discover";
 import { composePage } from "./render";
+import { applyStored as applyStoredPage, applyStoredIn, swapIn } from "./apply";
+import { loadSettings } from "./settings";
+import { TranslationStore } from "./store";
+import { enqueuesWholeDocument, normalizeHost, normalizeMode, type ReaderMode } from "./sites";
 import {
   STATE,
   ORIG_SRC,
   ORIG_SRCSET,
-  applyBackgroundSwap,
+  APPLIED_BLOB,
   restoreOriginalBackground,
   reapplyTranslatedBackground,
   onSiteSourceSwap,
@@ -22,10 +26,34 @@ import { OverlayLayer } from "./overlay";
 import type { TranslateResponse } from "./types";
 
 const MAX_CONTEXT = 20;
+// How far past the viewport a page still counts as "on screen" for the default
+// discovery pass. Only meaningful on `auto` sites — feeds and forums, where a
+// wider window would swallow every image ever posted in the channel.
+const VIEWPORT_PAD_PX = 1500;
 
 const queue = new TranslateQueue();
-const blobs = new Map<Element, string>();
+const store = new TranslationStore();
 const translations: string[] = []; // rolling context, completed pages only
+
+/**
+ * Reader layout of the current site. `auto` until the stored setting arrives, so
+ * a trigger fired during startup uses the conservative viewport window rather
+ * than guessing a reader it has not been told about.
+ */
+let readerMode: ReaderMode = "auto";
+
+async function loadReaderMode(): Promise<void> {
+  const s = await loadSettings().catch(() => null);
+  if (!s) return;
+  readerMode = normalizeMode(s.readerModes[normalizeHost(location.hostname)]);
+}
+
+void loadReaderMode();
+// Changing the mode in Options must take effect without reloading the reader,
+// which is exactly the tab the user is reading a chapter in.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.readerModes) void loadReaderMode();
+});
 
 /* ---------------- UI ---------------- */
 
@@ -215,7 +243,7 @@ function showOriginal(el: Element): void {
   if (!(el instanceof HTMLImageElement)) return;
   const orig = el.getAttribute(ORIG_SRC);
   if (!orig || el.getAttribute(STATE) !== "done") return;
-  const current = blobs.get(el);
+  const current = el.getAttribute(APPLIED_BLOB);
   el.setAttribute("src", orig);
   const origSet = el.getAttribute(ORIG_SRCSET);
   if (origSet) el.setAttribute("srcset", origSet);
@@ -260,6 +288,14 @@ document.addEventListener("keyup", (e) => {
 function enqueue(el: Element, opts: { priority?: boolean } = {}): void {
   if (el.getAttribute(STATE) === "pending" || el.getAttribute(STATE) === "done") return;
   if (!isMangaCandidate(el) || !isVisibleCandidate(el)) return;
+  // A page the store already holds is not work: the blob goes straight back on.
+  // On a paged reader this is the difference between returning to page 3 and
+  // paying the full perception + LLM cost for a translation that still exists.
+  if (applyStored(el)) {
+    flashDone(el);
+    syncHud();
+    return;
+  }
   const queuedBefore = queue.size;
   queue.enqueue(el, opts);
   // TranslateQueue silently drops duplicates and images with no resolvable URL,
@@ -268,6 +304,15 @@ function enqueue(el: Element, opts: { priority?: boolean } = {}): void {
   enqueues++;
   void pump();
   syncHud();
+}
+
+/**
+ * Re-apply a page this tab has already translated, without a server round trip.
+ * Thin wrapper so the store reaches the mutation paths without every call site
+ * having to pass it along.
+ */
+function applyStored(el: Element): boolean {
+  return applyStoredPage(el, store);
 }
 
 async function pump(): Promise<void> {
@@ -312,22 +357,11 @@ async function translateOne(el: Element): Promise<void> {
   });
   const objectUrl = URL.createObjectURL(blob);
 
-  if (el instanceof HTMLImageElement) {
-    el.setAttribute(ORIG_SRC, url);
-    const origSrcset = el.getAttribute("srcset");
-    if (origSrcset) el.setAttribute(ORIG_SRCSET, origSrcset);
-    el.removeAttribute("srcset"); // lazy loaders must not override our swap
-    el.removeAttribute("data-src");
-  }
-  if (el instanceof HTMLElement && !(el instanceof HTMLImageElement)) {
-    // Only the background-image property is written: the same inline style
-    // carries scroll-snap and direction values the reader needs for paging.
-    applyBackgroundSwap(el, objectUrl);
-  }
-
-  const prevBlob = blobs.get(el);
-  if (prevBlob) URL.revokeObjectURL(prevBlob);
-  blobs.set(el, objectUrl);
+  swapIn(el, url, objectUrl);
+  // The store takes over the blob's lifetime. The element attribute above is
+  // only bookkeeping for show-original; releasing here on unmount would throw
+  // away a page the user is about to come back to.
+  store.set(url, objectUrl);
   if (el instanceof HTMLImageElement) el.setAttribute("src", objectUrl);
 
   for (const block of resp.blocks) translations.push(block.translation);
@@ -348,12 +382,15 @@ document.addEventListener("keydown", (e) => {
   triggerNearby();
 });
 
-function revokeEl(el: Element): void {
-  const blob = blobs.get(el);
-  if (blob) {
-    URL.revokeObjectURL(blob);
-    blobs.delete(el);
-  }
+/**
+ * Forget an element we no longer control.
+ *
+ * The blob is deliberately NOT released: it is owned by the store, keyed by the
+ * page URL, and a paged reader unmounting a page is exactly the case where the
+ * user will want it back.
+ */
+function detachEl(el: Element): void {
+  el.removeAttribute(APPLIED_BLOB);
 }
 
 const mo = new MutationObserver((records) => {
@@ -368,20 +405,30 @@ const mo = new MutationObserver((records) => {
         if (ownWrites.has(el)) continue; // our swap/show-original, not a site change
         // The site replaced a background it no longer wants translated. Same
         // rule as the img path: clear bookkeeping, never re-queue.
-        if (onSiteSourceSwap(el, revokeEl)) dropErrorChip(el);
+        if (onSiteSourceSwap(el, detachEl)) dropErrorChip(el);
         continue;
       }
       if (!(el instanceof HTMLImageElement)) continue;
       const next = el.getAttribute(rec.attributeName ?? "src") ?? "";
       // Our own swap produces blob: URLs; ignore it to avoid feedback loops.
       if (next.startsWith("blob:")) continue;
+      // A reader that reuses one node and reassigns src for every page: the node
+      // that just became page 3 may already be translated from an earlier visit.
+      if (applyStored(el)) {
+        flashDone(el);
+        syncHud();
+        continue;
+      }
       // Stale translation bookkeeping is cleared, never re-queued: only an
       // explicit user action may start another translate.
-      if (onSiteSourceSwap(el, revokeEl)) dropErrorChip(el); // the retry offer pointed at state that no longer exists
+      if (onSiteSourceSwap(el, detachEl)) dropErrorChip(el); // the retry offer pointed at state that no longer exists
     } else if (rec.type === "childList") {
+      for (const node of rec.addedNodes) {
+        for (const applied of applyStoredIn(node, store)) flashDone(applied);
+      }
       for (const node of rec.removedNodes) {
         if (!(node instanceof Element)) continue;
-        revokeEl(node);
+        detachEl(node);
         queue.remove(node);
         dropAnchors(node);
       }
@@ -395,16 +442,22 @@ mo.observe(document.documentElement, {
   subtree: true,
 });
 
-/** Queue every un-translated candidate within one viewport of the scroll. */
+/** Queue every un-translated candidate this trigger should reach. */
 function enqueueNearby(): void {
   // Background-carried pages have no dedicated tag and carry no state
   // attributes before their first translation, so the selector also matches
   // any element whose inline style declares background-image — the only place
   // a page bitmap can live for the paths this extension reads.
+  const wholeDocument = enqueuesWholeDocument(readerMode);
   for (const el of document.querySelectorAll("img, [style*=\"background-image\"]")) {
     if (!isMangaCandidate(el)) continue;
-    const r = el.getBoundingClientRect();
-    if (r.bottom >= -1500 && r.top <= window.innerHeight + 1500) enqueue(el);
+    if (!wholeDocument) {
+      // Feeds and forums: stay near the viewport. A wider pass here would enqueue
+      // every image the user has ever scrolled past in a channel.
+      const r = el.getBoundingClientRect();
+      if (r.bottom < -VIEWPORT_PAD_PX || r.top > window.innerHeight + VIEWPORT_PAD_PX) continue;
+    }
+    enqueue(el);
   }
 }
 

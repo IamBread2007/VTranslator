@@ -156,11 +156,12 @@ export class TranslateQueue {
   enqueue(el: Element, opts: { priority?: boolean } = {}): void {
     const url = resolveImageUrl(el);
     if (!url) return;
-    // Dedupe key is (element, canonical URL): the same node observed twice is
-    // skipped, but a site swapping its URL re-queues it for re-evaluation.
-    const dup = (e: Entry) => e.el === el && e.url === url;
-    if (this.current && dup(this.current)) return;
-    if (this.entries.some(dup)) return;
+    // Dedupe on the URL alone, not (element, url): a paged reader can mount two
+    // nodes for one page, and the same node can be re-observed with a new src.
+    // Either way the page is the same bitmap, so a second job would be a second
+    // identical translation — and the per-call LLM cost of paying for it twice.
+    if (this.current?.url === url) return;
+    if (this.entries.some((e) => e.url === url)) return;
     this.entries.push({ el, url, priority: opts.priority === true });
   }
 

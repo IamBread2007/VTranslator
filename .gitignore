@@ -11,3 +11,7 @@ workspace/
 *.log
 .vitest/
 mangaPanelForTesting.jpg
+
+# Nội bộ: ghi chú phát triển và kế hoạch agent, giữ trên máy, không đưa lên GitHub
+docs/
+pi-warden.md

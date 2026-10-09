@@ -15,6 +15,11 @@ export const ORIG_BG = "data-mt-original-bg";
 // Exported because the MutationObserver in content.ts must treat a style change
 // during the show-original pause as ours, not as a site swap.
 export const HIDDEN_BG = "data-mt-hidden-bg";
+// The object URL currently painted onto this element. Element-level, not the
+// URL-keyed lifetime: this only exists so "show original" can put the same blob
+// back on mouseup, and so detaching an element forgets which blob it held.
+// store.ts owns when a blob is actually released.
+export const APPLIED_BLOB = "data-mt-blob";
 
 /**
  Replace a background element's page image with our composed blob.
