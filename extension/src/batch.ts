@@ -24,23 +24,35 @@ export function newBatchId(): string {
 }
 
 /**
- * Decides whether one more page may be dispatched for a paid translation.
+ * Decides how many pages a batch may dispatch, and who has to agree to them.
  *
- * `admit` is called immediately before each request, never at scan time. That is
- * the whole point: a reader can reveal pages the user never saw when they
- * confirmed, so a decision made during discovery could be stale by dispatch.
+ * Two gates, with different jobs:
  *
- * Consent is headroom, not a permanent unlock. Granting it covers the pages the
- * dialog actually showed, so a lazy reader that later reveals more asks again
- * instead of quietly spending the user's money. The cap is absolute and is
- * checked first: consent can authorise work, it can never raise the ceiling.
+ * `needsConsent(discovered)` is the blocking pre-flight check. It runs once,
+ * against a full discovery pass, *before the first paid request* — so a chapter
+ * of 33 pages prompts before page 1 rather than after ten pages have already
+ * been paid for.
+ *
+ * `admit` is the dispatch-time safeguard that runs before every request. It
+ * catches pages the reader revealed after the dialog was answered, and it is
+ * not a substitute for the pre-flight prompt.
+ *
+ * Approval is expressed as an absolute limit on pages dispatched, starting at
+ * the configured threshold and raised cumulatively by each confirmation. Raising
+ * it cumulatively rather than keeping a running maximum is what lets a user
+ * approve "five more" twice and get ten more.
+ *
+ * The cap is separate and absolute: confirmation can authorise work, it can
+ * never raise the ceiling.
  */
 export class Batch {
   private currentId = newBatchId();
   private readonly admitted = new Set<string>();
-  private grantedHeadroom = 0;
+  private approvedPages: number;
 
-  constructor(private readonly config: BatchConfig) {}
+  constructor(private readonly config: BatchConfig) {
+    this.approvedPages = config.consentThreshold;
+  }
 
   get id(): string {
     return this.currentId;
@@ -51,8 +63,26 @@ export class Batch {
     return this.admitted.size;
   }
 
+  /** Pages this batch may dispatch before it must ask again. */
+  get approvedLimit(): number {
+    return this.approvedPages;
+  }
+
+  /**
+   * Blocking check for the initial discovery pass. Strictly greater: a chapter
+   * of exactly `consentThreshold` pages is small enough to just translate.
+   */
+  needsConsent(discovered: number): boolean {
+    return discovered > this.approvedPages;
+  }
+
+  /**
+   * Record the user's confirmation of `additional` pages. Cumulative, so
+   * confirming the same size twice authorises twice as many; non-positive
+   * values are ignored so a malformed caller cannot shrink an approval.
+   */
   grantConsent(additional: number): void {
-    if (additional > this.grantedHeadroom) this.grantedHeadroom = additional;
+    if (additional > 0) this.approvedPages += additional;
   }
 
   admit(url: string): DispatchDecision {
@@ -64,10 +94,7 @@ export class Batch {
       return { proceed: false, reason: "cap-reached" };
     }
 
-    if (
-      this.admitted.size >= this.config.consentThreshold &&
-      this.admitted.size >= this.config.consentThreshold + this.grantedHeadroom
-    ) {
+    if (this.admitted.size >= this.approvedPages) {
       return { proceed: false, reason: "consent-required" };
     }
 
@@ -75,10 +102,10 @@ export class Batch {
     return { proceed: true, reason: "ok" };
   }
 
-  /** New identity, cleared accounting, no inherited consent. */
+  /** New identity, cleared accounting, approval back to the threshold. */
   reset(): void {
     this.currentId = newBatchId();
     this.admitted.clear();
-    this.grantedHeadroom = 0;
+    this.approvedPages = this.config.consentThreshold;
   }
 }

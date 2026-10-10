@@ -59,6 +59,44 @@ describe("Batch", () => {
     expect(b.admit("p15")).toEqual({ proceed: false, reason: "consent-required" });
   });
 
+  it("extends consent when the user approves another batch of pages", () => {
+    // Regression: keeping only the maximum ever granted meant a second approval
+    // of the same size added nothing, so a long chapter could never be finished
+    // without the user confirming once and watching it stall at that number.
+    const b = new Batch(CFG);
+    for (let i = 0; i < 10; i++) b.admit(`p${i}`);
+
+    b.grantConsent(5);
+    for (let i = 10; i < 15; i++) expect(b.admit(`p${i}`).proceed).toBe(true);
+
+    b.grantConsent(5); // user approves five more, of the same size as before
+    for (let i = 15; i < 20; i++) expect(b.admit(`p${i}`).proceed).toBe(true);
+
+    expect(b.accepted).toBe(20);
+    expect(b.admit("p20").reason).toBe("consent-required");
+  });
+
+  it("ignores a non-positive grant rather than shrinking the approval", () => {
+    const b = new Batch(CFG);
+    for (let i = 0; i < 10; i++) b.admit(`p${i}`);
+    b.grantConsent(5);
+    b.grantConsent(0);
+    b.grantConsent(-3);
+    for (let i = 10; i < 15; i++) expect(b.admit(`p${i}`).proceed).toBe(true);
+    expect(b.admit("p15").reason).toBe("consent-required");
+  });
+
+  it("starts the approval at the threshold and never above the cap", () => {
+    const b = new Batch(CFG);
+    expect(b.approvedLimit).toBe(10);
+    b.grantConsent(10_000);
+    // The cap is a separate gate; the approval is not allowed to raise it.
+    expect(b.approvedLimit).toBe(10_010);
+    expect(b.admit(`p${0}`).reason).toBe("ok");
+    for (let i = 1; i < 60; i++) b.admit(`p${i}`);
+    expect(b.admit("p60").reason).toBe("cap-reached");
+  });
+
   it("caps granted consent so it cannot authorise past the cap", () => {
     const b = new Batch({ consentThreshold: 10, maxPages: 12 });
     for (let i = 0; i < 10; i++) b.admit(`p${i}`);
@@ -112,5 +150,39 @@ describe("Batch", () => {
     b.reset();
     for (let i = 0; i < 10; i++) b.admit(`p${i}`);
     expect(b.admit("p10").reason).toBe("consent-required");
+  });
+});
+describe("Batch pre-flight", () => {
+  it("asks before the first paid request when initial discovery exceeds the limit", () => {
+    // 33 pages found up front with a threshold of 10 must be confirmed before
+    // page 1, not after ten pages have already been paid for.
+    const b = new Batch(CFG);
+    expect(b.needsConsent(33)).toBe(true);
+    expect(b.accepted).toBe(0);
+
+    b.grantConsent(23); // user approved exactly the 33 that were found
+    expect(b.needsConsent(33)).toBe(false);
+    expect(b.admit("p0")).toEqual({ proceed: true, reason: "ok" });
+  });
+
+  it("does not ask when discovery is exactly at the threshold", () => {
+    expect(new Batch(CFG).needsConsent(10)).toBe(false);
+  });
+
+it("does not ask for a short chapter, and leaves late pages to the dispatch gate", () => {
+    // A short strip needs no dialog. The automatic allowance still covers the
+    // first 10 pages; only once that is spent does a lazily revealed page trip
+    // the dispatch gate.
+    const b = new Batch(CFG);
+    expect(b.needsConsent(4)).toBe(false);
+    for (let i = 0; i < 10; i++) expect(b.admit(`p${i}`).proceed).toBe(true);
+    expect(b.admit("p10").reason).toBe("consent-required");
+  });
+
+  it("still asks at pre-flight for a lazy reader that already exceeds the limit", () => {
+    // Lazily mounted is not a reason to skip the prompt when the pages are
+    // already known: the user is still about to pay for 40 of them.
+    const b = new Batch(CFG);
+    expect(b.needsConsent(40)).toBe(true);
   });
 });
