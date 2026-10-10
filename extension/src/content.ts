@@ -564,6 +564,9 @@ async function translateOne(el: Element, batchId: string): Promise<void> {
     url,
     pageUrl: location.href,
     prevContext,
+    // Carried so the worker's Stop gate can target this exact run; without it
+    // the worker cannot tell this request apart from another tab's batch.
+    batchId,
   })) as TranslateResponse | { error: string };
 
   // The guard sits at the first await boundary and before anything observable:
