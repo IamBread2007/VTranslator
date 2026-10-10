@@ -99,7 +99,7 @@ let batchDurations: number[] = [];
 let batchDone = 0;
 let batchError = 0;
 let capReached = false;
-let batchStopReason: "capped" | "declined" | null = null;
+let batchStopReason: "capped" | "declined" | "user" | null = null;
 
 /**
  * One pump per tab. Two loops would fight over the queue's single in-flight slot
@@ -140,13 +140,58 @@ let coverage = currentCoverage();
  * paid for them. Only the waiting queue is dropped, and only the in-flight page
  * is left for pump() to revert.
  */
-function stopBatch(reason: "capped" | "declined"): void {
+function stopBatch(reason: "capped" | "declined" | "user"): void {
   batchStopReason = reason;
   queue.clear();
+  hideStopButton();
   // Retiring the id is what invalidates any response still in flight.
   activeBatchId = "";
   batch = null;
   syncBatchHud();
+}
+
+// A batch can be a few dozen pages, so it needs a control that stops it without
+// waiting for it to reach the cap or run out of pages. It lives in the fixed
+// layer rather than inside the progress pill because the pill is anchored to an
+// image that may scroll out of view mid-batch.
+let stopBtn: HTMLButtonElement | null = null;
+
+function showStopButton(): void {
+  if (stopBtn || !batch) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  // The same marker the integration tests use to detect the content script.
+  btn.dataset.mtHud = "";
+  btn.textContent = "Dừng";
+  btn.style.cssText =
+    "position:fixed;right:16px;bottom:16px;z-index:2147483647;padding:8px 14px;" +
+    "font:14px sans-serif;background:#b3261e;color:#fff;border:0;border-radius:6px;cursor:pointer";
+  btn.addEventListener("click", () => void userStopBatch());
+  stopBtn = btn;
+  document.body.appendChild(btn);
+}
+
+function hideStopButton(): void {
+  stopBtn?.remove();
+  stopBtn = null;
+}
+
+/**
+ * Stop the run and tell the worker to abandon the request in flight.
+ *
+ * The batch id is captured before `stopBatch` retires it: retiring is what makes
+ * this tab ignore the late response, and the worker still needs the id to know
+ * which upstream call to cancel.
+ */
+async function userStopBatch(): Promise<void> {
+  const stoppingId = activeBatchId;
+  stopBatch("user");
+  if (!stoppingId) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "mt-stop", batchId: stoppingId });
+  } catch {
+    // The worker can already be asleep; the tab-side stop above still stands.
+  }
 }
 
 /** The queue drained with no stop: retire the batch but keep the summary. */
@@ -154,6 +199,7 @@ function finishBatch(): void {
   if (!batch) return;
   activeBatchId = "";
   batch = null;
+  hideStopButton();
   syncBatchHud();
 }
 
@@ -758,6 +804,7 @@ async function triggerNearby(): Promise<void> {
   capReached = false;
   batchStopReason = null;
   coverage = currentCoverage();
+  showStopButton();
 
   const before = enqueues;
   seeding = true; // one pump at the end, not one per discovered page

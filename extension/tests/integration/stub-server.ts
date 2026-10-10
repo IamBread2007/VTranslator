@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { solidPng } from "./harness";
 
@@ -12,7 +12,21 @@ export interface StubServer {
   origin: string;
   token: string;
   requests: StubRequest[];
+  /** Requests the client tore down before a response was written. */
+  aborted: number[];
+  /** Held requests, when started with `{ hold: true }`. */
+  readonly held: number;
+  /** Answers every held request. */
+  release(): void;
   close(): Promise<void>;
+}
+
+export interface StubOptions {
+  /**
+   * Accept requests but never answer them, so a test can act while a page is
+   * genuinely in flight. Needed to observe Stop rather than infer it.
+   */
+  hold?: boolean;
 }
 
 /**
@@ -24,15 +38,36 @@ export interface StubServer {
  * place to observe prev_context, which is the only way to check that pages were
  * dispatched in reading order rather than merely completed.
  */
-export async function startStubServer(): Promise<StubServer> {
+export async function startStubServer(opts: StubOptions = {}): Promise<StubServer> {
   const png = solidPng(800, 1200).toString("base64");
   const requests: StubRequest[] = [];
+  const aborted: number[] = [];
+  const heldResponses: ServerResponse[] = [];
+  let held = 0;
+
+  const body = (): string =>
+    JSON.stringify({
+      width: 800,
+      height: 1200,
+      inpainted_png: png,
+      resolved_source_lang: "ja",
+      blocks: [],
+      warnings: [],
+    });
 
   const server: Server = createServer((req, res) => {
     if (req.method !== "POST") {
       res.writeHead(404).end();
       return;
     }
+    // The client vanished. Which event reports it depends on how far the request
+    // got: `aborted` when the body was still uploading, and a response that
+    // closes before it finished being written otherwise. Both mean the same
+    // thing to Stop, so both are counted.
+    req.on("aborted", () => aborted.push(requests.length));
+    res.on("close", () => {
+      if (!res.writableFinished) aborted.push(requests.length);
+    });
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
@@ -51,17 +86,13 @@ export async function startStubServer(): Promise<StubServer> {
       }
       requests.push({ prevContext, bodyBytes: raw.length });
 
+      if (opts.hold) {
+        held += 1;
+        heldResponses.push(res);
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          width: 800,
-          height: 1200,
-          inpainted_png: png,
-          resolved_source_lang: "ja",
-          blocks: [],
-          warnings: [],
-        }),
-      );
+      res.end(body());
     });
   });
 
@@ -72,6 +103,16 @@ export async function startStubServer(): Promise<StubServer> {
     origin: `http://127.0.0.1:${addr.port}`,
     token: "stub-token",
     requests,
+    aborted,
+    get held() {
+      return held;
+    },
+    release: () => {
+      for (const res of heldResponses.splice(0)) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(body());
+      }
+    },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
