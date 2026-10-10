@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: horizontal slide reader</title>
+    <style>
+      body { margin: 0; }
+      /* The reader holds every page in one wide row and translates the row so a
+         single page is centred. Nothing is hidden from the DOM, so all 30 pages
+         are real candidates even though only one is on screen at a time. */
+      #strip { display: flex; flex-wrap: nowrap; width: max-content; }
+      #strip img { flex: 0 0 auto; width: 800px; height: 1200px; }
+    </style>
+  </head>
+  <body>
+    <h1>Trượt ngang</h1>
+    <!-- Expected: 30 candidates. The reader has no banner and no duplicates. -->
+    <div id="strip"></div>
+    <script>
+      const strip = document.getElementById("strip");
+      for (let i = 1; i <= 30; i++) {
+        const img = document.createElement("img");
+        img.src = `/page/${i}.png`;
+        img.width = 800;
+        img.height = 1200;
+        img.alt = `trang ${i}`;
+        strip.appendChild(img);
+      }
+    </script>
+  </body>
+</html>

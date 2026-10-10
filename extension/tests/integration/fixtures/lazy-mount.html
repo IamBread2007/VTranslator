@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: lazy-mounting reader</title>
+  </head>
+  <body>
+    <h1>Trang sinh khi cuon</h1>
+    <!-- A reader that only builds the next page once the previous one is on
+         screen, which is what "se trang" actually looks like in the wild.
+
+         This is the fixture that makes progressive discovery honest: no amount of
+         scanning a document that has not mounted its later pages can claim the
+         whole chapter, and a run that stops here must say "trang da thay".
+
+         The leading spacer puts the sentinel below the fold, so the pages really
+         are absent at load rather than appearing a beat later. -->
+    <div id="lead" style="height: 300vh"></div>
+    <div id="sentinel" style="height: 50px"></div>
+    <div id="pages"></div>
+    <div id="tail" style="height: 300vh"></div>
+    <script>
+      const pages = document.getElementById("pages");
+      const sentinel = document.getElementById("sentinel");
+      const TOTAL = 20;
+      let made = 0;
+      new IntersectionObserver(
+        (entries) => {
+          if (!entries.some((e) => e.isIntersecting)) return;
+          while (made < TOTAL) {
+            made += 1;
+            const img = document.createElement("img");
+            img.src = `/page/${made}.png`;
+            img.width = 800;
+            img.height = 1200;
+            img.alt = `trang ${made}`;
+            pages.appendChild(img);
+          }
+        },
+        { rootMargin: "200px" },
+      ).observe(sentinel);
+      window.madeCount = () => made;
+    </script>
+  </body>
+</html>

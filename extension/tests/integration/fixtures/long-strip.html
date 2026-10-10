@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: long strip reader</title>
+    <style>
+      /* block-level so the pages form a true single column: inline images would
+         sit on a shared baseline and the differing widths would stagger them,
+         which is a rendering detail rather than a reader shape. */
+      img { display: block; }
+    </style>
+  </head>
+  <body>
+    <h1>Mot cot dai</h1>
+    <!-- The common vertical-scroll shape: every page in one column, all of them
+         in the DOM at once. Carries the two edge cases the 3:1 rule has to get
+         right, so one fixture covers the ordinary case and its boundary:
+           - page 7 is 367x640, portrait and clearly a page: must be found
+           - page 9 is 1200x300, a 4:1 banner: must be excluded
+         Expected: 34 <img>, of which 33 are candidates. -->
+    <script>
+      for (let i = 1; i <= 33; i++) {
+        const img = document.createElement("img");
+        img.src = `/page/${i}.png`;
+        img.alt = `trang ${i}`;
+        if (i === 7) {
+          img.width = 367;
+          img.height = 640;
+        } else if (i === 9) {
+          img.width = 1200;
+          img.height = 300;
+        } else {
+          img.width = 800;
+          img.height = 1200;
+        }
+        document.body.appendChild(img);
+      }
+    </script>
+  </body>
+</html>

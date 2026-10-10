@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: paged reader that swaps src</title>
+  </head>
+  <body>
+    <h1>Doi anh trong mot node</h1>
+    <!-- The paged shape that breaks naive bookkeeping: there is one <img>, and
+         advancing the reader replaces its src instead of mounting a new node.
+         Any implementation that counts elements, or that remembers a page by its
+         node, cannot tell page 3 from page 4 here.
+
+         Expected: 30 distinct URLs are discovered over time, from one node. The
+         test advances the reader and asserts each page is enqueued once, in
+         order, with no duplicate for a URL it already saw. -->
+    <img id="stage" src="/page/1.png" width="800" height="1200" alt="trang 1" />
+    <script>
+      const stage = document.getElementById("stage");
+      let n = 1;
+      // Advancing rewrites the same node. `turn` is what the test drives.
+      window.turn = () => {
+        n += 1;
+        if (n > 30) return n;
+        stage.src = `/page/${n}.png`;
+        stage.alt = `trang ${n}`;
+        return n;
+      };
+      window.currentPage = () => n;
+    </script>
+  </body>
+</html>

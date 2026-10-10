@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: duplicate URLs</title>
+  </head>
+  <body>
+    <h1>Hai node mot anh</h1>
+    <!-- The same artwork referenced twice, which is ordinary on real readers: a
+         chapter opener repeats the cover, and a site's responsive markup can
+         render one image into several slots.
+
+         The run must bill and translate it once. Anything keyed by element, or by
+         "have I seen this node", pays for page 2 twice and can then overwrite the
+         first result with the second.
+
+         Expected: 5 distinct URLs are dispatched, from 9 nodes. -->
+    <script>
+      // node 1 and node 2 share /page/1.png; node 5 and node 6 share /page/3.png
+      const shared = [1, 2, 3, 4, 3, 5, 1, 6, 2];
+      for (const n of shared) {
+        const img = document.createElement("img");
+        img.src = `/page/${n}.png`;
+        img.width = 800;
+        img.height = 1200;
+        img.alt = `trang ${n}`;
+        document.body.appendChild(img);
+      }
+    </script>
+  </body>
+</html>

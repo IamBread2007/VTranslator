@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: pages as CSS backgrounds</title>
+    <style>
+      .page {
+        width: 800px;
+        height: 1200px;
+        background-image: url(/page/1.png);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Trang nen CSS</h1>
+    <!-- Readers that never create an <img>. The artwork is real and visible, but
+         there is no element with a src for a naive scan to find, and no width or
+         height attribute to judge a 3:1 ratio from.
+
+         Expected: discovery reports these as candidates, because they are pages a
+         reader is looking at. Whether they can be swapped in place is a separate
+         question from being seen, and these are here to make that distinction
+         explicit rather than to assert a result that is not implemented yet. -->
+    <div class="page"></div>
+    <div class="page" style="background-image: url(/page/2.png)"></div>
+    <div class="page" style="background-image: url(/page/3.png)"></div>
+    <div class="page" style="background-image: url(/page/4.png)"></div>
+    <div class="page" style="background-image: url(/page/5.png)"></div>
+  </body>
+</html>
