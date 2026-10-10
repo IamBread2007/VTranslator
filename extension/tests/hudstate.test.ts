@@ -243,7 +243,7 @@ function view(partial: Partial<BatchView> = {}): BatchView {
     done: 0,
     error: 0,
     queued: 0,
-    capped: 0,
+    capReached: false,
     coverage: "progressive",
     ...partial,
   };
@@ -309,11 +309,20 @@ describe("summarizeBatch", () => {
     expect(v.text).toContain("2");
   });
 
-  it("announces the cap rather than implying the chapter finished", () => {
-    // Review Focus #5: a 65-page chapter stopped at 60 must say so.
-    const v = summarizeBatch(view({ discovered: 65, done: 60, capped: 5, coverage: "complete" }));
+it("announces the cap without inventing a count of omitted pages", () => {
+    // Review Focus #5: a 65-page chapter stopped at 60 must say so. It must not
+    // claim "5 pages were skipped", because discovery cannot know how many
+    // pages remain on a reader that has not finished mounting them.
+    const v = summarizeBatch(view({ discovered: 65, done: 60, capReached: true, coverage: "complete" }));
     expect(v.text).toMatch(/giới hạn/i);
     expect(v.text).not.toMatch(/toàn bộ|cả chương/);
+    expect(v.text).not.toMatch(/\d+\s*trang (chưa|bị)\s*$/);
+    expect(v.text).not.toMatch(/5\s*trang/);
+  });
+
+  it("does not claim the cap when it was never reached", () => {
+    const v = summarizeBatch(view({ discovered: 30, done: 30, coverage: "complete" }));
+    expect(v.text).not.toMatch(/giới hạn/i);
   });
 
   it("stays idle when a batch never started", () => {

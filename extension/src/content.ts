@@ -98,8 +98,23 @@ let batch: Batch | null = null;
 let batchDurations: number[] = [];
 let batchDone = 0;
 let batchError = 0;
-let batchCapped = 0;
+let capReached = false;
 let batchStopReason: "capped" | "declined" | null = null;
+
+/**
+ * One pump per tab. Two loops would fight over the queue's single in-flight slot
+ * and both increment the same counters.
+ */
+let pumping = false;
+
+/**
+ * True while the blocking consent dialog is open.
+ *
+ * The job being decided keeps the queue's in-flight slot the whole time, so any
+ * other pump's `dequeue()` returns undefined and it exits without touching
+ * anything. Rediscovery may still append behind it.
+ */
+let pausedForConsent = false;
 
 /** Set while a discovery pass is still seeding the queue, to defer pumping. */
 let seeding = false;
@@ -129,6 +144,14 @@ function stopBatch(reason: "capped" | "declined"): void {
   batchStopReason = reason;
   queue.clear();
   // Retiring the id is what invalidates any response still in flight.
+  activeBatchId = "";
+  batch = null;
+  syncBatchHud();
+}
+
+/** The queue drained with no stop: retire the batch but keep the summary. */
+function finishBatch(): void {
+  if (!batch) return;
   activeBatchId = "";
   batch = null;
   syncBatchHud();
@@ -192,7 +215,7 @@ function syncBatchHud(): void {
     done: batchDone,
     error: batchError,
     queued: queue.size,
-    capped: batchCapped,
+    capReached,
     coverage: coverage.state(),
     eta: etaFor(batchDone, discovered, batchDurations),
   };
@@ -438,65 +461,95 @@ async function confirmMore(count: number): Promise<boolean> {
 }
 
 async function pump(): Promise<void> {
-  while (true) {
-    const el = queue.dequeue();
-    if (!el) return;
-    const url = resolveImageUrl(el);
+  // One pump per tab. A second loop would race this one over the queue's single
+  // in-flight slot and over the batch counters.
+  if (pumping) return;
+  pumping = true;
+  try {
+    while (true) {
+      const el = queue.dequeue();
+      if (!el) break;
+      const url = resolveImageUrl(el);
 
-    // Consent and the cap are enforced immediately before each paid request,
-    // not at discovery time, because a reader can reveal pages the user never
-    // saw when they confirmed.
-    if (batch && url) {
-      const decision = batch.admit(url);
-      if (!decision.proceed) {
-        queue.settle(); // release the slot before awaiting, or it strands
-        if (decision.reason === "cap-reached") {
-          batchCapped = Math.max(batchCapped, 1);
-          stopBatch("capped");
-          return;
+      // Consent and the cap are enforced immediately before each paid request,
+      // not at discovery time, because a reader can reveal pages the user never
+      // saw when they confirmed.
+      if (batch && url) {
+        const decision = batch.admit(url);
+        if (!decision.proceed) {
+          if (decision.reason === "cap-reached") {
+            queue.settle();
+            capReached = true;
+            stopBatch("capped");
+            return;
+          }
+          // The job stays in the queue's in-flight slot for the whole dialog.
+          // Settling it and re-queueing would let a rediscovery pass reorder the
+          // queue underneath the answer, and would leave the page in a state no
+          // path owns. Holding the slot also means any other pump's dequeue()
+          // returns undefined and exits immediately.
+          pausedForConsent = true;
+          syncHud();
+          const approved = await confirmMore(batch.accepted + 1);
+          pausedForConsent = false;
+          if (!approved) {
+            queue.settle(); // nothing was dispatched for this element
+            return;
+          }
+          // The reader may have unmounted or replaced the page while the dialog
+          // was open; translating a detached node would waste a paid request.
+          if (!el.isConnected || el.getAttribute(STATE) === "done") {
+            queue.settle();
+            continue;
+          }
+          // The grant may have been absorbed by the cap instead.
+          if (!batch.admit(url).proceed) {
+            queue.settle();
+            capReached = true;
+            stopBatch("capped");
+            return;
+          }
+          // Same element, same slot, same position: fall through and dispatch.
         }
-        if (!(await confirmMore(batch.accepted + 1))) return;
-        // The grant may have been eaten by the cap instead.
-        if (!batch.admit(url).proceed) {
-          batchCapped = Math.max(batchCapped, 1);
-          stopBatch("capped");
-          return;
+      }
+
+      el.setAttribute(STATE, "pending");
+      showRing(el);
+      const startedAt = performance.now();
+      try {
+        await translateOne(el, activeBatchId);
+        batchDurations.push(performance.now() - startedAt);
+        batchDone++;
+        el.setAttribute(STATE, "done");
+        dropRing(el);
+        flashDone(el);
+      } catch (err) {
+        if (err instanceof StaleBatch) {
+          // This page belonged to a run that has since been stopped or replaced.
+          // It is neither a success nor a failure: no state is written, so the
+          // page reads exactly as it did before the request, and nothing is added
+          // to the rolling translation context.
+          el.removeAttribute(STATE);
+          dropRing(el);
+          syncBatchHud();
+        } else {
+          batchError++;
+          el.setAttribute(STATE, "error");
+          dropRing(el);
+          showErrorChip(el);
+          console.error("MT translate failed:", err);
         }
-        queue.enqueue(el); // put it back; admit() only accounts, it does not queue
-        if (queue.dequeue() !== el) return;
+      } finally {
+        queue.settle();
+        syncHud();
       }
     }
-
-    el.setAttribute(STATE, "pending");
-    showRing(el);
-    const startedAt = performance.now();
-    try {
-      await translateOne(el, activeBatchId);
-      batchDurations.push(performance.now() - startedAt);
-      batchDone++;
-      el.setAttribute(STATE, "done");
-      dropRing(el);
-      flashDone(el);
-    } catch (err) {
-      if (err instanceof StaleBatch) {
-        // This page belonged to a run that has since been stopped or replaced.
-        // It is neither a success nor a failure: no state is written, so the
-        // page reads exactly as it did before the request, and nothing is added
-        // to the rolling translation context.
-        el.removeAttribute(STATE);
-        dropRing(el);
-        syncBatchHud();
-      } else {
-        batchError++;
-        el.setAttribute(STATE, "error");
-        dropRing(el);
-        showErrorChip(el);
-        console.error("MT translate failed:", err);
-      }
-    } finally {
-      queue.settle();
-      syncHud();
-    }
+    // The queue drained on its own. Settle the batch so a later trigger is not
+    // swallowed by a finished run, and leave the summary on screen.
+    finishBatch();
+  } finally {
+    pumping = false;
+    pausedForConsent = false;
   }
 }
 
@@ -648,16 +701,27 @@ function enqueueNearby(): void {
  * before the first paid request. A 33-page chapter prompts once, up front,
  * rather than discovering the cost ten pages in.
  */
-async function triggerNearby(): Promise<void> {
-  const found = scan(document, {
+/** Every distinct page URL currently mounted, in DOM order. */
+function collectUnique(): Map<string, Element> {
+  const unique = new Map<string, Element>();
+  for (const el of scan(document, {
     wholeDocument: enqueuesWholeDocument(readerMode),
     padPx: VIEWPORT_PAD_PX,
-  });
-  const unique = new Map<string, Element>();
-  for (const el of found) {
+  })) {
     const url = resolveImageUrl(el);
     if (url) unique.set(url, el);
   }
+  return unique;
+}
+
+async function triggerNearby(): Promise<void> {
+  // Policy: a trigger arriving while a batch is running, or while its consent
+  // dialog is open, is ignored rather than queued. Two batches in one tab would
+  // share the single translate queue and the rolling translation context, and a
+  // second pre-flight prompt would appear behind the first for no reason.
+  if (batch || pausedForConsent || pumping) return;
+
+  const unique = collectUnique();
   if (unique.size === 0) {
     hud.flash(emptyView(), TTL_MS.empty);
     return;
@@ -665,9 +729,22 @@ async function triggerNearby(): Promise<void> {
 
   const next = new Batch(limits);
   if (next.needsConsent(unique.size)) {
+    // Mark the tab busy before awaiting so a second Alt+T during the dialog is
+    // ignored rather than opening a competing batch behind it.
+    pausedForConsent = true;
     const ok = await hud.prompt(promptBatchConsent(unique.size, limits.maxPages));
+    pausedForConsent = false;
     if (!ok) return; // nothing was dispatched and nothing was charged
     next.grantConsent(Math.max(1, unique.size - next.approvedLimit));
+
+    // The reader may have mounted pages while the dialog was open, and the
+    // rediscovery observer ignores them because no batch is running yet. Re-scan
+    // so the approval applies to what exists now rather than to a snapshot taken
+    // before the user was asked. Such pages were not in the dialog, so they fall
+    // through to the dispatch-time safeguard and are confirmed separately.
+    for (const [url, el] of collectUnique()) {
+      if (!unique.has(url)) unique.set(url, el);
+    }
   }
 
   batch = next;
@@ -675,7 +752,7 @@ async function triggerNearby(): Promise<void> {
   batchDurations = [];
   batchDone = 0;
   batchError = 0;
-  batchCapped = 0;
+  capReached = false;
   batchStopReason = null;
   coverage = currentCoverage();
 
@@ -686,6 +763,16 @@ async function triggerNearby(): Promise<void> {
     enqueue(el);
   }
   seeding = false;
+
+  // A completed whole-document scan is a genuine traversal: every mounted page
+  // was walked. Asserted from the scan, never from the queue draining — an empty
+  // queue says nothing about whether the reader has more pages to mount, so it
+  // must never be read as "whole chapter translated". `auto` keeps progressive
+  // coverage because a viewport band is not a traversal.
+  //
+  // Must come after the accept() calls above: accepting a page is itself
+  // evidence that discovery is still running, and it reopens coverage.
+  if (enqueuesWholeDocument(readerMode)) coverage.finishTraversal();
   if (enqueues === before) {
     hud.flash(emptyView(), TTL_MS.empty);
     return;

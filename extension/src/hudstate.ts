@@ -112,8 +112,14 @@ export interface BatchView {
   done: number;
   error: number;
   queued: number;
-  /** Pages the cap refused. Non-zero is always worth saying out loud. */
-  capped: number;
+  /**
+   * The cap stopped the batch. Deliberately a flag and not a count: hitting the
+   * cap means discovery found more work than we are allowed to do, and the
+   * exact number of pages left undone is not known — a lazy reader may not have
+   * mounted the rest yet. Inventing an "omitted" figure would read as a promise
+   * about work the extension cannot see.
+   */
+  capReached: boolean;
   coverage: "complete" | "progressive";
   eta?: string;
 }
@@ -145,12 +151,13 @@ export function etaFor(
 
 export function summarizeBatch(v: BatchView): HudView {
   // The cap outranks completion: hitting it means work was deliberately left
-  // undone, and a "done" line would claim otherwise.
-  if (v.capped > 0) {
+  // undone, and a "done" line would claim otherwise. The message states that the
+  // limit was reached without guessing how many pages that left behind.
+  if (v.capReached) {
     return {
       kind: "stop",
       tone: "warn",
-      text: `Đã đạt giới hạn — ${v.done} trang đã dịch, ${v.capped} trang chưa dịch. Tăng giới hạn trong tuỳ chọn nếu muốn dịch tiếp.`,
+      text: "Đã đạt giới hạn số trang cho phép. Tăng giới hạn trong tuỳ chọn nếu muốn dịch tiếp.",
     };
   }
 
