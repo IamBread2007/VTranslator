@@ -10,7 +10,7 @@ export interface Counts {
   running: boolean;
 }
 
-export type HudKind = "idle" | "running" | "done" | "error" | "empty";
+export type HudKind = "idle" | "running" | "done" | "error" | "empty" | "consent" | "stop";
 
 /**
  * Count the images this extension has touched under `root`.
@@ -50,7 +50,7 @@ export function collectCounts(root: ParentNode, busy: boolean, queued = 0): Coun
 export interface HudView {
   kind: HudKind;
   text: string;
-  tone: "neutral" | "ok" | "error";
+  tone: "neutral" | "ok" | "error" | "warn";
 }
 
 // How long a self-dismissing state stays up. A translation can take 12-25s per
@@ -99,4 +99,108 @@ export function badgeFor(c: Counts): { text: string; color: string } {
 function clampBadge(text: string, color: string): { text: string; color: string } {
   if (text.length <= 4) return { text, color };
   return { text: "...", color: "#5f6368" };
+}
+
+/**
+ * Batch progress. Separate from `Counts` because those count `data-mt-state`
+ * attributes in the DOM and cannot know about pages that were discovered but
+ * never mounted, never dispatched, or refused by the cap.
+ */
+export interface BatchView {
+  /** Unique source pages seen so far. Not necessarily the whole chapter. */
+  discovered: number;
+  done: number;
+  error: number;
+  queued: number;
+  /** Pages the cap refused. Non-zero is always worth saying out loud. */
+  capped: number;
+  coverage: "complete" | "progressive";
+  eta?: string;
+}
+
+/**
+ * Estimated time remaining, or undefined when there is nothing honest to show.
+ *
+ * Needs two successful samples because one page says nothing about the next:
+ * the first request pays cold-start and cache-miss costs that later pages do
+ * not, so a single sample systematically overestimates. `durations` must hold
+ * only completed pages; a failed request has no page time to contribute.
+ *
+ * The denominator is the pages discovered so far, never a chapter total the
+ * extension cannot see.
+ */
+export function etaFor(
+  done: number,
+  discovered: number,
+  durations: number[],
+): string | undefined {
+  if (durations.length < 2) return undefined;
+  const remaining = discovered - done;
+  if (remaining <= 0) return undefined;
+  const mean = durations.reduce((a, b) => a + b, 0) / durations.length;
+  const seconds = (mean * remaining) / 1000;
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return seconds >= 60 ? `~${Math.round(seconds / 60)} phút` : `~${Math.round(seconds)} giây`;
+}
+
+export function summarizeBatch(v: BatchView): HudView {
+  // The cap outranks completion: hitting it means work was deliberately left
+  // undone, and a "done" line would claim otherwise.
+  if (v.capped > 0) {
+    return {
+      kind: "stop",
+      tone: "warn",
+      text: `Đã đạt giới hạn — ${v.done} trang đã dịch, ${v.capped} trang chưa dịch. Tăng giới hạn trong tuỳ chọn nếu muốn dịch tiếp.`,
+    };
+  }
+
+  const eta = v.eta ? ` — ${v.eta}` : "";
+  // "đã thấy" is deliberate: until coverage is complete the denominator is what
+  // discovery has seen, and presenting it as the chapter total would be a lie
+  // the user acts on.
+  const scope = v.coverage === "complete" ? "trang" : "trang đã thấy";
+  const outstanding = v.done + v.error < v.discovered || v.queued > 0;
+
+  if (outstanding) {
+    return {
+      kind: "running",
+      tone: "neutral",
+      text: `Đang dịch ${v.done}/${v.discovered} ${scope}${eta}…`,
+    };
+  }
+  if (v.error > 0) {
+    return { kind: "error", tone: "error", text: `⚠ ${v.error} trang lỗi — bấm để thử lại` };
+  }
+  if (v.done > 0) {
+    return {
+      kind: "done",
+      tone: "ok",
+      text:
+        v.coverage === "complete"
+          ? `✓ Đã dịch toàn bộ ${v.done}/${v.discovered} trang`
+          : `✓ Đã dịch ${v.done} ${scope} — có thể còn trang chưa hiện`,
+    };
+  }
+  return { kind: "idle", tone: "neutral", text: "" };
+}
+
+/**
+ * The blocking confirmation shown before the first paid request of a batch.
+ *
+ * States page count and the cap, and warns that each page costs an API call.
+ * It never states a price: the extension knows how many pages, never what a page
+ * costs, and an invented figure would be worse than none.
+ */
+export function promptBatchConsent(discovered: number, cap: number): HudView {
+  // The cap is always stated, not only when it binds: knowing the ceiling up
+  // front is part of what the user is agreeing to.
+  const capLine =
+    discovered > cap
+      ? ` Tối đa ${cap} trang, nên ${discovered - cap} trang sẽ không được dịch.`
+      : ` Tối đa ${cap} trang.`;
+  return {
+    kind: "consent",
+    tone: "warn",
+    text: `Tìm thấy ${discovered} trang chưa dịch. Dịch tiếp? Mỗi trang là một lần gọi API và có thể phát sinh chi phí.${capLine}`,
+  };
 }

@@ -1,6 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from "vitest";
-import { collectCounts, summarize, emptyView, badgeFor, TTL_MS, type Counts } from "../src/hudstate";
+import {
+  collectCounts,
+  summarize,
+  emptyView,
+  badgeFor,
+  etaFor,
+  summarizeBatch,
+  promptBatchConsent,
+  TTL_MS,
+  type BatchView,
+  type Counts,
+} from "../src/hudstate";
 
 function counts(partial: Partial<Counts> = {}): Counts {
   return { total: 0, done: 0, error: 0, running: false, ...partial };
@@ -223,5 +234,109 @@ describe("collectCounts", () => {
 describe("TTL_MS", () => {
   it("matches the confirmed-state timings the HUD relies on", () => {
     expect(TTL_MS).toEqual({ done: 4000, empty: 3000, chip: 1200 });
+  });
+});
+
+function view(partial: Partial<BatchView> = {}): BatchView {
+  return {
+    discovered: 0,
+    done: 0,
+    error: 0,
+    queued: 0,
+    capped: 0,
+    coverage: "progressive",
+    ...partial,
+  };
+}
+
+describe("etaFor", () => {
+  it("is undefined below two successful samples", () => {
+    expect(etaFor(1, 10, [])).toBeUndefined();
+    expect(etaFor(1, 10, [5000])).toBeUndefined();
+    expect(etaFor(0, 10, [])).toBeUndefined();
+  });
+
+  it("counts only the pages still outstanding", () => {
+    expect(etaFor(2, 10, [1000, 1000])).toBe("~8 giây");
+    expect(etaFor(5, 10, [1000, 1000])).toBe("~5 giây");
+  });
+
+  it("switches to minutes once the estimate reaches a minute", () => {
+    expect(etaFor(2, 10, [70000, 70000])).toBe("~9 phút");
+  });
+
+  it("has nothing left to estimate once every discovered page is done", () => {
+    expect(etaFor(10, 10, [1000, 1000])).toBeUndefined();
+  });
+
+  it("ignores failed pages, because only successful durations are sampled", () => {
+    // The caller passes durations of completed translations only, so an error
+    // never drags the estimate toward a page time it never had.
+    expect(etaFor(3, 10, [1000, 1000])).toBe("~7 giây");
+  });
+});
+
+describe("summarizeBatch", () => {
+  it("never presents a progressive total as the whole chapter", () => {
+    // Review Focus #1: "5/33" alone would read as "33 is the chapter".
+    const v = summarizeBatch(view({ discovered: 33, done: 5, queued: 28, eta: "~8 giây" }));
+    expect(v.kind).toBe("running");
+    expect(v.text).toContain("5/33");
+    expect(v.text).not.toMatch(/toàn bộ|cả chương/);
+    expect(v.text).toContain("~8 giây");
+  });
+
+  it("says the whole chapter only once coverage is verified complete", () => {
+    const v = summarizeBatch(view({ discovered: 33, done: 33, coverage: "complete" }));
+    expect(v.kind).toBe("done");
+    expect(v.text).toContain("33/33");
+  });
+
+  it("stays honest when a batch finishes but coverage was never complete", () => {
+    const v = summarizeBatch(view({ discovered: 30, done: 30, coverage: "progressive" }));
+    expect(v.kind).toBe("done");
+    expect(v.text).not.toMatch(/toàn bộ|cả chương/);
+  });
+
+  it("omits the ETA entirely when there are too few samples", () => {
+    const v = summarizeBatch(view({ discovered: 33, done: 1, queued: 32 }));
+    expect(v.text).not.toMatch(/~.*(giây|phút)/);
+  });
+
+  it("reports errors for retry once nothing is outstanding", () => {
+    const v = summarizeBatch(view({ discovered: 12, done: 10, error: 2, coverage: "complete" }));
+    expect(v.kind).toBe("error");
+    expect(v.text).toContain("2");
+  });
+
+  it("announces the cap rather than implying the chapter finished", () => {
+    // Review Focus #5: a 65-page chapter stopped at 60 must say so.
+    const v = summarizeBatch(view({ discovered: 65, done: 60, capped: 5, coverage: "complete" }));
+    expect(v.text).toMatch(/giới hạn/i);
+    expect(v.text).not.toMatch(/toàn bộ|cả chương/);
+  });
+
+  it("stays idle when a batch never started", () => {
+    expect(summarizeBatch(view()).kind).toBe("idle");
+  });
+});
+
+describe("promptBatchConsent", () => {
+  it("is a blocking warn view naming the pages found and the cap", () => {
+    const v = promptBatchConsent(33, 60);
+    expect(v.kind).toBe("consent");
+    expect(v.tone).toBe("warn");
+    expect(v.text).toContain("33");
+    expect(v.text).toContain("60");
+  });
+
+  it("warns about cost without inventing a currency amount", () => {
+    // The extension knows page count, never what a page costs.
+    expect(promptBatchConsent(33, 60).text).not.toMatch(/[$€₫]\s*\d/);
+    expect(promptBatchConsent(33, 60).text).toMatch(/API|phí|chi phí/);
+  });
+
+  it("tells the user what the cap means when discovery exceeds it", () => {
+    expect(promptBatchConsent(65, 60).text).toMatch(/60/);
   });
 });
