@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -93,3 +94,121 @@ def test_translate_http_error_raises():
     t = _translator(lambda req: httpx.Response(429, json={"error": "quota"}))
     with pytest.raises(TranslationError, match="429"):
         t.translate(Image.new("RGB", (50, 50)), _items("x"), "ja", "vi", [])
+
+
+def _async_translator(handler):
+    return LlmTranslator(
+        "http://llm",
+        "k",
+        "m",
+        async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+
+def _ok(content: str) -> dict:
+    return {"choices": [{"message": {"content": content}}]}
+
+
+def test_translate_async_returns_the_same_result_as_the_sync_path():
+    def handler(req):
+        return httpx.Response(
+            200, json=_ok('{"translations":[{"id":1,"text":"dich"}]}')
+        )
+
+    async def run():
+        t = _async_translator(handler)
+        return await t.translate_async(
+            Image.new("RGB", (50, 50)), _items("x"), "ja", "vi", []
+        )
+
+    assert asyncio.run(run()) == {1: "dich"}
+
+
+def test_translate_async_retries_once_on_bad_json():
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(200, json=_ok("not json at all"))
+        return httpx.Response(
+            200, json=_ok('{"translations":[{"id":1,"text":"dich"}]}')
+        )
+
+    async def run():
+        t = _async_translator(handler)
+        return await t.translate_async(
+            Image.new("RGB", (50, 50)), _items("x"), "ja", "vi", []
+        )
+
+    assert asyncio.run(run()) == {1: "dich"}
+    assert len(calls) == 2
+
+
+def test_translate_async_http_error_raises_translation_error():
+    async def run():
+        t = _async_translator(lambda req: httpx.Response(429, json={"error": "quota"}))
+        await t.translate_async(Image.new("RGB", (50, 50)), _items("x"), "ja", "vi", [])
+
+    with pytest.raises(TranslationError, match="429"):
+        asyncio.run(run())
+
+
+def test_cancellation_propagates_and_is_not_turned_into_a_translation_error():
+    # This is the property the whole Stop feature rests on. If CancelledError
+    # were caught and re-raised as TranslationError, a cancelled request would
+    # look like a failed one: the page would be marked errored and the upstream
+    # call billed as if it had failed on its own merits.
+    started = asyncio.Event()
+
+    async def handler(req):
+        started.set()
+        await asyncio.sleep(30)  # never completes inside the test
+        return httpx.Response(200, json=_ok("{}"))
+
+    async def run():
+        t = _async_translator(handler)
+        task = asyncio.create_task(
+            t.translate_async(Image.new("RGB", (50, 50)), _items("x"), "ja", "vi", [])
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+
+
+def test_cancelling_before_the_request_starts_never_reaches_the_llm():
+    calls = []
+
+    async def handler(req):
+        calls.append(1)
+        return httpx.Response(200, json=_ok("{}"))
+
+    async def run():
+        t = _async_translator(handler)
+        task = asyncio.create_task(
+            t.translate_async(Image.new("RGB", (50, 50)), _items("x"), "ja", "vi", [])
+        )
+        task.cancel()  # before the coroutine ever runs
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert calls == [], "a cancelled run still spent an LLM call"
+
+
+def test_translate_async_returns_empty_without_calling_the_llm():
+    calls = []
+
+    async def handler(req):
+        calls.append(1)
+        return httpx.Response(200, json=_ok("{}"))
+
+    async def run():
+        t = _async_translator(handler)
+        return await t.translate_async(Image.new("RGB", (50, 50)), [], "ja", "vi", [])
+
+    assert asyncio.run(run()) == {}
+    assert calls == []

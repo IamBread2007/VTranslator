@@ -63,7 +63,9 @@ def _build_app(probe: _Probe) -> FastAPI:
 @pytest.fixture
 def server():
     probe = _Probe()
-    config = uvicorn.Config(_build_app(probe), host="127.0.0.1", port=0, log_level="warning")
+    config = uvicorn.Config(
+        _build_app(probe), host="127.0.0.1", port=0, log_level="warning"
+    )
     srv = uvicorn.Server(config)
     thread = threading.Thread(target=srv.run, daemon=True)
     thread.start()
@@ -87,7 +89,9 @@ def server():
 def _hard_reset(port: int) -> None:
     """Send a request, then drop the connection with a TCP RST."""
     s = socket.create_connection(("127.0.0.1", port), timeout=5)
-    s.sendall(b"GET /slow HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n")
+    s.sendall(
+        b"GET /slow HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n"
+    )
     # SO_LINGER with a zero timeout makes close() emit RST rather than FIN,
     # which is the harder case for the server to observe.
     s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
@@ -146,6 +150,8 @@ def test_detection_is_prompt_enough_to_poll(server):
 
     assert probe.disconnected.wait(3)
     latency = probe.detected_at - closed_at
-    print(f"\ndisconnect detected {latency * 1000:.0f}ms after close (poll {DISCONNECT_POLL_S * 1000:.0f}ms)")
+    print(
+        f"\ndisconnect detected {latency * 1000:.0f}ms after close (poll {DISCONNECT_POLL_S * 1000:.0f}ms)"
+    )
     # Anything slower than a second would make Stop feel broken to the user.
     assert latency < 1.0, f"disconnect took {latency:.3f}s to observe"

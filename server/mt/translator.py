@@ -203,23 +203,17 @@ class LlmTranslator:
         model: str,
         timeout_s: float = 90.0,
         client: httpx.Client | None = None,
+        async_client: httpx.AsyncClient | None = None,
     ):
         self.url = base_url.rstrip("/") + "/chat/completions"
         self._api_key = api_key
         self.model = model
         self.timeout_s = timeout_s
         self._client = client or httpx.Client()
+        self._async_client = async_client or httpx.AsyncClient()
 
-    def _complete(self, messages: list[dict]) -> str:
-        try:
-            r = self._client.post(
-                self.url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json={"model": self.model, "messages": messages, "temperature": 0.3},
-                timeout=self.timeout_s,
-            )
-        except httpx.HTTPError as e:
-            raise TranslationError(f"LLM network error: {type(e).__name__}") from e
+    @staticmethod
+    def _content(r: httpx.Response) -> str:
         if r.status_code != 200:
             raise TranslationError(f"LLM HTTP {r.status_code}: {r.text[:200]}")
         try:
@@ -227,6 +221,53 @@ class LlmTranslator:
         except (ValueError, KeyError, IndexError, TypeError) as e:
             raise TranslationError(f"LLM bad response: {r.text[:200]}") from e
         return content if isinstance(content, str) else ""
+
+    def _body(self, messages: list[dict]) -> dict:
+        return {"model": self.model, "messages": messages, "temperature": 0.3}
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self._api_key}"}
+
+    def _complete(self, messages: list[dict]) -> str:
+        try:
+            r = self._client.post(
+                self.url,
+                headers=self._headers(),
+                json=self._body(messages),
+                timeout=self.timeout_s,
+            )
+        except httpx.HTTPError as e:
+            raise TranslationError(f"LLM network error: {type(e).__name__}") from e
+        return self._content(r)
+
+    async def _complete_async(self, messages: list[dict]) -> str:
+        # Only httpx.HTTPError is caught. CancelledError is a BaseException and is
+        # deliberately allowed through: the whole point of this path is that
+        # cancelling the task tears down the outbound request. Converting it to
+        # TranslationError would make a user-requested stop indistinguishable
+        # from a genuine failure, and the page would be marked errored.
+        try:
+            r = await self._async_client.post(
+                self.url,
+                headers=self._headers(),
+                json=self._body(messages),
+                timeout=self.timeout_s,
+            )
+        except httpx.HTTPError as e:
+            raise TranslationError(f"LLM network error: {type(e).__name__}") from e
+        return self._content(r)
+
+    def _finish(
+        self, raw: str, messages: list[dict], valid: set[int]
+    ) -> dict[int, str]:
+        if _extract_obj(raw) is not None:
+            return parse_translations(raw, valid)
+        retry = [
+            *messages,
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": RETRY_INSTRUCTION},
+        ]
+        return parse_translations(self._complete(retry), valid)
 
     def translate(
         self,
@@ -244,7 +285,30 @@ class LlmTranslator:
             images, [(i, t) for i, _, t in items], src, tgt, prev_context
         )
         valid = {i for i, _, _ in items}
-        raw = self._complete(messages)
+        return self._finish(self._complete(messages), messages, valid)
+
+    async def translate_async(
+        self,
+        page: Image.Image,
+        items: Sequence[tuple[int, Box, str]],
+        src: str,
+        tgt: str,
+        prev_context: Sequence[str],
+        warnings: list[str] | None = None,
+    ) -> dict[int, str]:
+        """Cancellable counterpart of `translate`.
+
+        Awaiting an AsyncClient request means cancelling the task aborts the
+        socket, which is what stops the provider continuing to bill for tokens.
+        """
+        if not items:
+            return {}
+        images = build_vision_images(page, [(i, b) for i, b, _ in items], warnings)
+        messages = build_messages(
+            images, [(i, t) for i, _, t in items], src, tgt, prev_context
+        )
+        valid = {i for i, _, _ in items}
+        raw = await self._complete_async(messages)
         if _extract_obj(raw) is not None:
             return parse_translations(raw, valid)
         retry = [
@@ -252,4 +316,4 @@ class LlmTranslator:
             {"role": "assistant", "content": raw},
             {"role": "user", "content": RETRY_INSTRUCTION},
         ]
-        return parse_translations(self._complete(retry), valid)
+        return parse_translations(await self._complete_async(retry), valid)
