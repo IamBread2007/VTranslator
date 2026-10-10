@@ -3,6 +3,7 @@
 Two cache stages: perception (everything before the LLM) and translation.
 """
 
+import asyncio
 import base64
 import io
 import logging
@@ -189,7 +190,40 @@ class Pipeline:
 
     # ---------- full run ----------
 
+    def _perceive_locked(self, page: Image.Image, requested: str) -> tuple[dict, bytes]:
+        # The inference lock is acquired inside the worker thread. Holding it on
+        # the event loop would stall the disconnect watcher for the whole
+        # perception, which is precisely when a Stop needs to be noticed.
+        with self._infer_lock:
+            return self._perceive(page, requested)
+
+    async def _translate_async(
+        self,
+        page: Image.Image,
+        items: list[tuple[int, Box, str]],
+        lang: str,
+        tgt: str,
+        ctx: list[str],
+        warnings: list[str],
+    ) -> dict[int, str]:
+        # A translator that implements the async path can be cancelled mid-request,
+        # which is what stops the provider generating and billing further tokens.
+        # One that does not is pushed to a thread so the event loop keeps running.
+        async_call = getattr(self.translator, "translate_async", None)
+        if async_call is not None:
+            return await async_call(page, items, lang, tgt, ctx, warnings=warnings)
+        return await asyncio.to_thread(
+            self.translator.translate, page, items, lang, tgt, ctx, warnings
+        )
+
     def run(self, image_bytes: bytes, opts: TranslateOptions) -> TranslateResponse:
+        # Single implementation, two entry points: the CLI and the existing tests
+        # stay synchronous, and the HTTP handler awaits the cancellable one.
+        return asyncio.run(self.run_async(image_bytes, opts))
+
+    async def run_async(
+        self, image_bytes: bytes, opts: TranslateOptions
+    ) -> TranslateResponse:
         t0 = time.perf_counter()
         page = self._open(image_bytes)
 
@@ -204,8 +238,14 @@ class Pipeline:
         cached = self.cache.get_perception(p_key)
         p_hit = cached is not None
         if cached is None:
-            with self._infer_lock:
-                cached = self._perceive(page, opts.source_lang)
+            # Perception is CPU-bound, so it runs in a thread and a cancel cannot
+            # kill it mid-inference. The checkpoint sits *before* it starts, so a
+            # stop already requested is honoured without spending the work; a stop
+            # arriving during it is honoured at the next checkpoint below.
+            await asyncio.sleep(0)
+            cached = await asyncio.to_thread(
+                self._perceive_locked, page, opts.source_lang
+            )
             self.cache.put_perception(p_key, *cached)
         meta, png = cached
 
@@ -231,10 +271,15 @@ class Pipeline:
             if stored is not None:
                 translations = {int(k): v for k, v in stored.items()}
             else:
+                # Everything above was free. This is the point where the run
+                # starts costing money, so it is the last checkpoint before it.
+                await asyncio.sleep(0)
                 items = [(b["id"], Box(**b["box"]), b["source"]) for b in raw_blocks]
-                translations = self.translator.translate(
-                    page, items, lang, opts.target_lang, ctx, warnings=warnings
+                translations = await self._translate_async(
+                    page, items, lang, opts.target_lang, ctx, warnings
                 )
+                # Written only after a completed translation, so a cancelled run
+                # leaves nothing that a later read could mistake for a hit.
                 self.cache.put_translation(
                     t_key, {str(k): v for k, v in translations.items()}
                 )

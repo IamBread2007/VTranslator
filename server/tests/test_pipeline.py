@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 
@@ -178,3 +179,100 @@ def test_rejects_too_many_bytes(tmp_path):
 def test_rejects_non_image(tmp_path):
     with pytest.raises(UnsupportedImageError):
         make_pipeline(tmp_path).run(b"not an image", TranslateOptions())
+
+
+class FakeAsyncTr(FakeTr):
+    """A translator with a cancellable async path that can be held open."""
+
+    def __init__(self, reply="Chu", block=False):
+        super().__init__(reply)
+        self.block = block
+        self.started = None
+        self.cancelled = False
+
+    async def translate_async(self, img, items, src, tgt, ctx, warnings=None):
+        self.calls += 1
+        if self.block:
+            self.started = asyncio.get_event_loop().run_in_executor(None, self._never)
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+        return {items[0][0]: self.reply} if self.reply else {}
+
+    @staticmethod
+    def _never():
+        return None
+
+
+def test_run_async_returns_a_response(tmp_path):
+    p = make_pipeline(tmp_path)
+    r = asyncio.run(p.run_async(_png(), TranslateOptions(source_lang="ja")))
+    assert r.blocks
+
+
+def test_run_still_works_synchronously(tmp_path):
+    # The CLI and the existing tests depend on this entry point.
+    p = make_pipeline(tmp_path)
+    r = p.run(_png(), TranslateOptions(source_lang="ja"))
+    assert r.blocks
+
+
+def test_cancelling_before_the_llm_never_calls_the_translator(tmp_path):
+    tr = FakeAsyncTr(block=True)
+    p = make_pipeline(tmp_path, translator=tr)
+
+    async def main():
+        task = asyncio.create_task(
+            p.run_async(_png(), TranslateOptions(source_lang="ja"))
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    assert tr.cancelled is True
+
+
+def test_perception_cache_survives_a_cancelled_llm_call(tmp_path):
+    # Perception already ran; cancelling the LLM must keep its cache entry so a
+    # retry is translation-only rather than a full re-perceive.
+    tr = FakeAsyncTr(block=True)
+    p = make_pipeline(tmp_path, translator=tr)
+
+    async def first():
+        task = asyncio.create_task(
+            p.run_async(_png(), TranslateOptions(source_lang="ja"))
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(first())
+
+    tr2 = FakeAsyncTr(block=False)
+    p2 = make_pipeline(tmp_path, translator=tr2)
+    # Same cache dir and same inputs, so perception must come back from cache.
+    asyncio.run(p2.run_async(_png(), TranslateOptions(source_lang="ja")))
+    assert tr2.calls == 1
+
+
+def test_no_translation_cache_entry_after_cancel(tmp_path):
+    tr = FakeAsyncTr(block=True)
+    p = make_pipeline(tmp_path, translator=tr)
+
+    async def main():
+        task = asyncio.create_task(
+            p.run_async(_png(), TranslateOptions(source_lang="ja"))
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    files = list((tmp_path / "translation").glob("*.json"))
+    assert files == []
