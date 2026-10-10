@@ -123,3 +123,58 @@ describe("readerModes storage", () => {
     expect((await loadSettings()).readerModes).toEqual({});
   });
 });
+
+describe("batch limit storage", () => {
+  beforeEach(() => {
+    areas = makeChrome();
+  });
+
+  it("defaults both thresholds when unset", async () => {
+    const s = await loadSettings();
+    expect(s.consentThreshold).toBe(10);
+    expect(s.maxPages).toBe(60);
+  });
+
+  it("keeps explicitly configured values", async () => {
+    await chrome.storage.sync.set({ consentThreshold: 3, maxPages: 5 });
+    const s = await loadSettings();
+    expect(s.consentThreshold).toBe(3);
+    expect(s.maxPages).toBe(5);
+  });
+
+  it("falls back when a stored threshold is not a positive number", async () => {
+    await chrome.storage.sync.set({ consentThreshold: "many", maxPages: 0 });
+    const s = await loadSettings();
+    expect(s.consentThreshold).toBe(10);
+    expect(s.maxPages).toBe(60);
+  });
+
+  it("falls back on a negative cap rather than making the batch unusable", async () => {
+    await chrome.storage.sync.set({ maxPages: -5 });
+    expect((await loadSettings()).maxPages).toBe(60);
+  });
+
+  it("truncates a fractional threshold instead of storing a float", async () => {
+    await chrome.storage.sync.set({ consentThreshold: 3.9, maxPages: 60.7 });
+    const s = await loadSettings();
+    expect(s.consentThreshold).toBe(3);
+    expect(s.maxPages).toBe(60);
+  });
+
+  it("round-trips through saveSettings", async () => {
+    await saveSettings({ ...DEFAULTS, consentThreshold: 2, maxPages: 12 });
+    const s = await loadSettings();
+    expect(s.consentThreshold).toBe(2);
+    expect(s.maxPages).toBe(12);
+  });
+
+  it("keeps the limits in sync storage, never alongside the token", async () => {
+    await saveSettings({ ...DEFAULTS, token: "s3cret", consentThreshold: 4 });
+    expect(chrome.storage.sync.set).toHaveBeenCalledWith(
+      expect.objectContaining({ consentThreshold: 4 }),
+    );
+    expect(vi.mocked(chrome.storage.sync.set).mock.calls).not.toContainEqual([
+      expect.objectContaining({ token: "s3cret" }),
+    ]);
+  });
+});

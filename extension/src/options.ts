@@ -1,4 +1,4 @@
-import { loadSettings, saveSettings } from "./settings";
+import { loadSettings, saveSettings, DEFAULTS } from "./settings";
 import type { Settings } from "./settings";
 import {
   MODE_EXAMPLES,
@@ -29,12 +29,20 @@ function show(msg: string, ok: boolean): void {
   status.className = ok ? "ok" : "err";
 }
 
+/** An emptied or malformed number box must not become NaN in stored settings. */
+function intField(id: string, fallback: number): number {
+  const n = Number.parseInt($<HTMLInputElement>(id).value, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function formToSettings(s: Settings): Settings {
   return {
     ...s,
     serverUrl: $<HTMLInputElement>("serverUrl").value.replace(/\/+$/, ""),
     token: $<HTMLInputElement>("token").value,
     sourceLang: $<HTMLSelectElement>("sourceLang").value as Settings["sourceLang"],
+    consentThreshold: intField("consentThreshold", DEFAULTS.consentThreshold),
+    maxPages: intField("maxPages", DEFAULTS.maxPages),
   };
 }
 
@@ -158,6 +166,8 @@ async function init(): Promise<void> {
   $<HTMLInputElement>("token").value = s.token;
   $<HTMLSelectElement>("sourceLang").value = s.sourceLang;
   $<HTMLInputElement>("targetLang").value = s.targetLang;
+  $<HTMLInputElement>("consentThreshold").value = String(s.consentThreshold);
+  $<HTMLInputElement>("maxPages").value = String(s.maxPages);
   modes = s.readerModes;
   renderModes();
   initAddForm();

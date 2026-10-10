@@ -73,6 +73,22 @@
         <label for="targetLang">Ngôn ngữ đích</label>
         <input id="targetLang" name="targetLang" value="vi" readonly />
       </div>
+      <fieldset>
+        <legend>Giới hạn khi dịch cả chương</legend>
+        <p class="hint">
+          Mỗi trang là một lần gọi server và có thể tốn phí API. Vượt số trang
+          dưới đây, tiện ích sẽ hỏi lại trước khi gửi tiếp, và không bao giờ dịch
+          quá số trang tối đa.
+        </p>
+        <div class="row">
+          <label for="consentThreshold">Số trang dịch trước khi hỏi</label>
+          <input id="consentThreshold" name="consentThreshold" type="number" min="1" step="1" />
+        </div>
+        <div class="row">
+          <label for="maxPages">Số trang tối đa mỗi lần</label>
+          <input id="maxPages" name="maxPages" type="number" min="1" step="1" />
+        </div>
+      </fieldset>
       <button type="button" id="check">Kiểm tra kết nối</button>
       <button type="submit">Lưu</button>
     </form>
