@@ -15,10 +15,14 @@
     }
   ],
   "options_page": "options.html",
-  "commands": {
+"commands": {
     "translate-page": {
       "suggested_key": { "default": "Alt+T" },
       "description": "Dịch các ảnh chưa dịch trên trang"
+    },
+    "stop-page": {
+      "suggested_key": { "default": "Alt+S" },
+      "description": "Dừng lô dịch đang chạy trên trang"
     }
   },
   "web_accessible_resources": [

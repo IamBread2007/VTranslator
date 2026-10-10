@@ -299,11 +299,23 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 // Alt+T is registered as a browser command, so the page never sees the
 // keydown; forward it to the active tab instead.
 chrome.commands.onCommand.addListener((command) => {
-  if (command !== "translate-page") return;
-  void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
-    const id = tabs[0]?.id;
-    if (id !== undefined) {
-      void chrome.tabs.sendMessage(id, { type: "mt-enqueue-nearby" }).catch(() => undefined);
-    }
-  });
+  if (command === "translate-page") {
+    void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+      const id = tabs[0]?.id;
+      if (id !== undefined) {
+        void chrome.tabs.sendMessage(id, { type: "mt-enqueue-nearby" }).catch(() => undefined);
+      }
+    });
+    return;
+  }
+  if (command === "stop-page") {
+    // Forwarded to the tab rather than acted on here: only the page knows which
+    // batch is running, and the worker owns the request it needs to cancel.
+    void chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
+      const id = tabs[0]?.id;
+      if (id !== undefined) {
+        void chrome.tabs.sendMessage(id, { type: "mt-stop-batch" }).catch(() => undefined);
+      }
+    });
+  }
 });

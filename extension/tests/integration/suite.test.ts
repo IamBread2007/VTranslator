@@ -268,7 +268,7 @@ await page.addInitScript(() => {
       await startConsentRun(b, true);
       await waitForRequests(stub, 2);
 
-      const stopSel = 'button[data-mt-hud]:has-text("Dừng")';
+const stopSel = 'button[data-mt-hud]:has-text("Dừng")';
       await a.locator(stopSel).waitFor({ state: "visible", timeout: 20_000 });
       await b.locator(stopSel).waitFor({ state: "visible", timeout: 20_000 });
 
@@ -276,7 +276,14 @@ await page.addInitScript(() => {
       await expect
         .poll(async () => a.locator(stopSel).count(), { timeout: 15_000 })
         .toBe(0);
-      await page2StillRunning(b, stub);
+
+      // Tab b must run its chapter out. Checking that b's request count kept
+      // climbing would race b's own completion; "b finished all 33 pages" is the
+      // claim that actually matters, and it can only hold if a's Stop left b
+      // alone.
+      await expect.poll(() => doneCount(b), { timeout: 90_000 }).toBe(33);
+      // And tab a must be the one that stopped short.
+      expect(await doneCount(a)).toBeLessThan(33);
     } finally {
       await a.close();
       await b.close();
@@ -328,15 +335,3 @@ await configure(page, stub);
     }
   }, 180_000);
 });
-
-/** Tab b must keep making progress after tab a stopped. */
-async function page2StillRunning(
-  b: import("playwright").Page,
-  stub: StubServer,
-): Promise<void> {
-  const before = stub.requests.length;
-  await expect
-    .poll(async () => stub.requests.length, { timeout: 30_000 })
-    .toBeGreaterThan(before);
-  expect(await b.locator('img[data-mt-state="done"]').count()).toBeGreaterThan(0);
-}

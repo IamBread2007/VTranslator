@@ -82,12 +82,14 @@ describe("Stop", () => {
       const before = stub.requests.length;
 
       await page.locator(stopSel).click();
-      await new Promise((r) => setTimeout(r, 2_000));
+      // Polled rather than slept on: a fixed wait is fine when the machine is
+      // idle and flaky when it is not, which is the wrong property for a test
+      // that exists to prove something was actually cancelled.
+      await expect.poll(() => stub.aborted.length, { timeout: 20_000 }).toBeGreaterThan(0);
+      await page.waitForTimeout(1_500);
 
       // No further pages were dispatched after the stop...
       expect(stub.requests.length).toBe(before);
-      // ...and the held request was dropped by the client, not answered.
-      expect(stub.aborted.length).toBeGreaterThan(0);
 
       // The control disappears, because the run is over.
       await expect
@@ -108,7 +110,8 @@ describe("Stop", () => {
     try {
       await waitForRequests(stub, 1);
       await page.locator(stopSel).click();
-      await new Promise((r) => setTimeout(r, 2_000));
+      await expect.poll(() => stub.aborted.length, { timeout: 20_000 }).toBeGreaterThan(0);
+      await page.waitForTimeout(1_500);
       expect(await page.locator('img[data-mt-state="error"]').count()).toBe(0);
     } finally {
       stub.release();

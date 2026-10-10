@@ -873,6 +873,12 @@ chrome.runtime.onMessage.addListener(
       // Alt+T arrives here as a browser command forwarded from background;
       // everything goes through the same sequential queue.
       triggerNearby();
+    } else if (msg.type === "mt-stop-batch") {
+      // Alt+S. Stopping is idempotent and safe with no run in progress, because
+      // a keypress should never depend on knowing whether a batch happens to be
+      // active at that instant.
+      void userStopBatch();
+      sendResponse({ ok: true });
     } else if (msg.type === "mt-translate-url" && msg.url) {
       // Context menu: enqueue the clicked image in the same queue.
       for (const el of document.querySelectorAll("img, [data-mt-state]")) {
