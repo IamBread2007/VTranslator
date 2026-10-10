@@ -1,5 +1,12 @@
+import asyncio
 import secrets
+import socket
+import struct
+import threading
+import time
 
+import httpx
+import uvicorn
 from fastapi.testclient import TestClient
 
 from mt.app import create_app
@@ -146,3 +153,122 @@ def test_schema_roundtrip():
         warnings=[],
     )
     assert TranslateResponse.model_validate_json(r.model_dump_json()) == r
+
+
+class BlockingAsyncPipeline:
+    """A pipeline with a cancellable async path that can be held open."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+        self.finished = False
+        self._started = threading.Event()
+
+    def run(self, image_bytes, opts):  # pragma: no cover - async path is used
+        raise AssertionError("the async path should have been preferred")
+
+    async def run_async(self, image_bytes, opts):
+        self._started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        self.finished = True
+        return TranslateResponse(
+            width=1,
+            height=1,
+            inpainted_png="",
+            resolved_source_lang="ja",
+            blocks=[],
+            warnings=[],
+        )
+
+    def started(self):
+        return self._started.wait(10)
+
+
+def _start_server(pipeline):
+    s = Settings(
+        mt_token=TEST_TOKEN,
+        max_image_bytes=10 * 1024 * 1024,
+    )
+    config = uvicorn.Config(
+        create_app(s, pipeline=pipeline), host="127.0.0.1", port=0, log_level="warning"
+    )
+    srv = uvicorn.Server(config)
+    thread = threading.Thread(target=srv.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    port = None
+    while time.monotonic() < deadline:
+        sockets = getattr(srv, "servers", None) or []
+        if sockets:
+            port = sockets[0].sockets[0].getsockname()[1]
+            break
+        time.sleep(0.05)
+    assert port is not None
+    return srv, thread, port
+
+
+def test_disconnect_cancels_the_pipeline_over_a_real_socket():
+    # The end-to-end proof: a client that vanishes mid-request must tear the
+    # pipeline down instead of letting it run to completion. TestClient cannot
+    # express this, so it needs a real server and a real RST.
+    p = BlockingAsyncPipeline()
+    srv, thread, port = _start_server(p)
+    try:
+        boundary = b"--X\r\n"
+        body = (
+            boundary
+            + b'Content-Disposition: form-data; name="options"\r\n\r\n'
+            + b'{"source_lang":"ja"}\r\n'
+            + boundary
+            + b'Content-Disposition: form-data; name="image"; filename="a.png"\r\n'
+            + b"Content-Type: image/png\r\n\r\n"
+            + b"img"
+            + b"\r\n"
+            + b"--X--\r\n"
+        )
+        head = (
+            b"POST /translate HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"X-MT-Token: " + TEST_TOKEN.encode() + b"\r\n"
+            b"Content-Type: multipart/form-data; boundary=X\r\n"
+            + b"Content-Length: "
+            + str(len(body)).encode()
+            + b"\r\n"
+            + b"Connection: close\r\n\r\n"
+        )
+        s = socket.create_connection(("127.0.0.1", port), timeout=10)
+        s.sendall(head + body)
+        assert p.started(), "pipeline never started"
+
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        s.close()
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not p.cancelled:
+            time.sleep(0.05)
+        assert p.cancelled, "the pipeline kept running after the client vanished"
+        assert not p.finished
+    finally:
+        srv.should_exit = True
+        thread.join(timeout=5)
+
+
+def test_a_client_that_waits_still_gets_its_answer():
+    p = FakePipeline()
+    srv, thread, port = _start_server(p)
+    try:
+        r = httpx.post(
+            f"http://127.0.0.1:{port}/translate",
+            files={"image": ("a.png", b"img")},
+            data={"options": '{"source_lang":"ja"}'},
+            headers={"X-MT-Token": TEST_TOKEN},
+            timeout=15,
+        )
+        assert r.status_code == 200
+        assert r.json()["resolved_source_lang"] == "ja"
+    finally:
+        srv.should_exit = True
+        thread.join(timeout=5)
