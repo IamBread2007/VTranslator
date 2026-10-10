@@ -3,18 +3,72 @@ import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 import { chromium, type BrowserContext } from "playwright";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const FIXTURE_DIR = join(HERE, "fixtures");
 const DIST = join(HERE, "..", "..", "dist");
 
-// A decodable 1x1 PNG. The harness only proves the page and extension plumbing;
-// fixtures that need real page geometry arrive with the fixture suite.
-const PNG_1X1 = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PzWvWQAAAABJRU5ErkJggg==",
-  "base64",
-);
+/**
+ * Fixtures need bitmaps with real intrinsic dimensions.
+ *
+ * Discovery reads `naturalWidth`/`naturalHeight` first and only falls back to the
+ * width/height attributes, so a 1x1 placeholder makes every page look like an
+ * icon and the minimum-edge rule rejects all of them. Fixtures that stub geometry
+ * would pass unit tests and fail here for the wrong reason.
+ */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([len, body, crc]);
+}
+
+/** Solid-colour truecolour PNG of the requested size, unfiltered scanlines. */
+export function solidPng(width: number, height: number, rgb: [number, number, number] = [232, 232, 238]): Buffer {
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  let o = 0;
+  for (let y = 0; y < height; y++) {
+    raw[o++] = 0; // filter type "none"
+    for (let x = 0; x < width; x++) {
+      raw[o++] = rgb[0];
+      raw[o++] = rgb[1];
+      raw[o++] = rgb[2];
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // colour type: truecolour
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const PAGE_PNG = solidPng(800, 1200);
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -35,9 +89,22 @@ async function serveFixtures(): Promise<{ server: Server; origin: string }> {
     const path = decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname);
 
     // Synthesised so fixture pages need no binary files in the repository.
+    // Dimensions may be requested as /page/<w>x<h>.png; the bare /page/<n>.png
+    // form serves the default page shape.
+    const sized = /^\/page\/(\d+)x(\d+)\.png$/.exec(path);
+    if (sized) {
+      const png = solidPng(Number(sized[1]), Number(sized[2]));
+      res.writeHead(200, { "content-type": "image/png", "content-length": png.length });
+      res.end(png);
+      return;
+    }
     if (/^\/page\/\d+\.png$/.test(path)) {
-      res.writeHead(200, { "content-type": "image/png", "content-length": PNG_1X1.length });
-      res.end(PNG_1X1);
+      res.writeHead(200, { "content-type": "image/png", "content-length": PAGE_PNG.length });
+      res.end(PAGE_PNG);
+      return;
+    }
+    if (path === "/favicon.ico") {
+      res.writeHead(204).end();
       return;
     }
 

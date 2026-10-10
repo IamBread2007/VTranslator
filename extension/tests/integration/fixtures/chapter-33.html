@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: chapter of 33</title>
+  </head>
+  <body>
+    <h1>Chương 33 trang</h1>
+    <!-- Built at load so the fixture file stays readable. Every page is 800x1200,
+         clear of the 3:1 banner rule, so all 33 must be discovered. -->
+    <script>
+      for (let i = 1; i <= 33; i++) {
+        const img = document.createElement("img");
+        img.src = `/page/${i}.png`;
+        img.width = 800;
+        img.height = 1200;
+        img.alt = `trang ${i}`;
+        document.body.appendChild(img);
+      }
+    </script>
+  </body>
+</html>

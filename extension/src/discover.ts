@@ -209,4 +209,15 @@ export class TranslateQueue {
     this.entries = this.entries.filter((e) => e.el !== el);
     if (this.current?.el === el) this.current = null;
   }
+
+  /**
+   * Drop every waiting job.
+   *
+   * The in-flight job is deliberately left alone: the caller owns reverting that
+   * page, and clearing the slot here would strand it mid-translation with nothing
+   * left to settle it.
+   */
+  clear(): void {
+    this.entries = [];
+  }
 }

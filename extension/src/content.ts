@@ -21,9 +21,22 @@ import {
   onSiteSourceSwap,
   takeOwnStyleWrites,
 } from "./imgsrc";
-import { badgeFor, collectCounts, emptyView, summarize, TTL_MS } from "./hudstate";
+import {
+  badgeFor,
+  collectCounts,
+  emptyView,
+  summarize,
+  summarizeBatch,
+  etaFor,
+  promptBatchConsent,
+  TTL_MS,
+  type BatchView,
+} from "./hudstate";
 import { createHud } from "./hud";
 import { OverlayLayer } from "./overlay";
+import { Batch } from "./batch";
+import { trackCoverage } from "./discovery";
+import { DEFAULTS } from "./settings";
 import type { TranslateResponse } from "./types";
 
 const MAX_CONTEXT = 20;
@@ -43,10 +56,14 @@ const translations: string[] = []; // rolling context, completed pages only
  */
 let readerMode: ReaderMode = "auto";
 
+/** Batch limits, defaulted until the stored settings arrive. */
+let limits = { consentThreshold: DEFAULTS.consentThreshold, maxPages: DEFAULTS.maxPages };
+
 async function loadReaderMode(): Promise<void> {
   const s = await loadSettings().catch(() => null);
   if (!s) return;
   readerMode = normalizeMode(s.readerModes[normalizeHost(location.hostname)]);
+  limits = { consentThreshold: s.consentThreshold, maxPages: s.maxPages };
 }
 
 void loadReaderMode();
@@ -65,12 +82,71 @@ const layer = new OverlayLayer();
 // nothing can be told apart from a broken one.
 let enqueues = 0;
 
+/* ---------------- batch state ---------------- */
+
+/**
+ * Identity of the batch allowed to mutate the page right now.
+ *
+ * Empty means no batch is running. It is compared against the id captured when a
+ * request was dispatched, which is what makes a late response harmless: a page
+ * that finished after Stop, or after the user started a new batch, finds a
+ * different id and is discarded before it can touch the DOM, the rolling
+ * translation context, or the counters the HUD is showing.
+ */
+let activeBatchId = "";
+let batch: Batch | null = null;
+let batchDurations: number[] = [];
+let batchDone = 0;
+let batchError = 0;
+let batchCapped = 0;
+let batchStopReason: "capped" | "declined" | null = null;
+
+/** Set while a discovery pass is still seeding the queue, to defer pumping. */
+let seeding = false;
+
+/** Thrown when a response arrives after its batch lost the right to apply. */
+class StaleBatch extends Error {
+  constructor() {
+    super("batch no longer current");
+    this.name = "StaleBatch";
+  }
+}
+
+function currentCoverage() {
+  return trackCoverage();
+}
+
+let coverage = currentCoverage();
+
+/**
+ * Stop the batch without discarding work already finished.
+ *
+ * Completed pages keep their translations and their store entries: the user
+ * paid for them. Only the waiting queue is dropped, and only the in-flight page
+ * is left for pump() to revert.
+ */
+function stopBatch(reason: "capped" | "declined"): void {
+  batchStopReason = reason;
+  queue.clear();
+  // Retiring the id is what invalidates any response still in flight.
+  activeBatchId = "";
+  batch = null;
+  syncBatchHud();
+}
+
 /**
  * Refresh the page HUD and this tab's toolbar badge after any state change.
  * The badge is pushed here rather than polled because a content script is the
  * only place that sees both the DOM states and the queue's in-flight work.
  */
 function syncHud(): void {
+  // A running batch speaks through its own projection: the DOM-counting summary
+  // cannot see pages that were discovered but never mounted, never dispatched, or
+  // refused by the cap.
+  if (batch || batchStopReason) {
+    syncBatchHud();
+    return;
+  }
   // queue.size counts jobs whose image carries no data-mt-state yet (pump writes
   // that attribute only on dispatch), which is what makes the fraction show the
   // whole batch instead of a denominator that shrinks as work starts.
@@ -97,6 +173,31 @@ function syncHud(): void {
     return;
   }
   hud.update(c); // idle → hide the pill, no residue on an untouched page
+}
+
+/**
+ * Render batch progress.
+ *
+ * The ETA is derived from completed page durations only, and the denominator is
+ * what discovery has actually seen — `summarizeBatch` words it as "trang đã thấy"
+ * unless coverage is verified complete, so a lazy reader can never be told a
+ * partial run translated the whole chapter.
+ */
+function syncBatchHud(): void {
+  if (!batch && !batchStopReason) return;
+  const discovered = coverage.size();
+  const outstanding = batchDone + batchError < discovered || queue.size > 0 || queue.inFlight;
+  const view: BatchView = {
+    discovered,
+    done: batchDone,
+    error: batchError,
+    queued: queue.size,
+    capped: batchCapped,
+    coverage: coverage.state(),
+    eta: etaFor(batchDone, discovered, batchDurations),
+  };
+  if (outstanding) hud.updateBatch(view);
+  else hud.flash(summarizeBatch(view), TTL_MS.done);
 }
 
 // One singleton node: the overlay layer anchors one node to one image, so the
@@ -303,7 +404,10 @@ function enqueue(el: Element, opts: { priority?: boolean } = {}): void {
   // so only a size change means this call actually created work.
   if (queue.size === queuedBefore) return;
   enqueues++;
-  void pump();
+  // While a discovery pass is still seeding, one pump at the end covers the
+  // whole batch; pumping per page would open a second loop behind the consent
+  // dialog for no reason.
+  if (!seeding) void pump();
   syncHud();
 }
 
@@ -316,22 +420,79 @@ function applyStored(el: Element): boolean {
   return applyStoredPage(el, store);
 }
 
+/**
+ * Ask the user to authorise `count` more pages, and record the answer.
+ *
+ * Returns false when the user declined or the cap makes the work impossible
+ * either way, which the caller treats as "stop, keeping finished work".
+ */
+async function confirmMore(count: number): Promise<boolean> {
+  if (!batch) return false;
+  const ok = await hud.prompt(promptBatchConsent(count, limits.maxPages));
+  if (!ok) {
+    stopBatch("declined");
+    return false;
+  }
+  batch.grantConsent(Math.max(1, count - batch.approvedLimit));
+  return true;
+}
+
 async function pump(): Promise<void> {
   while (true) {
     const el = queue.dequeue();
     if (!el) return;
+    const url = resolveImageUrl(el);
+
+    // Consent and the cap are enforced immediately before each paid request,
+    // not at discovery time, because a reader can reveal pages the user never
+    // saw when they confirmed.
+    if (batch && url) {
+      const decision = batch.admit(url);
+      if (!decision.proceed) {
+        queue.settle(); // release the slot before awaiting, or it strands
+        if (decision.reason === "cap-reached") {
+          batchCapped = Math.max(batchCapped, 1);
+          stopBatch("capped");
+          return;
+        }
+        if (!(await confirmMore(batch.accepted + 1))) return;
+        // The grant may have been eaten by the cap instead.
+        if (!batch.admit(url).proceed) {
+          batchCapped = Math.max(batchCapped, 1);
+          stopBatch("capped");
+          return;
+        }
+        queue.enqueue(el); // put it back; admit() only accounts, it does not queue
+        if (queue.dequeue() !== el) return;
+      }
+    }
+
     el.setAttribute(STATE, "pending");
     showRing(el);
+    const startedAt = performance.now();
     try {
-      await translateOne(el);
+      await translateOne(el, activeBatchId);
+      batchDurations.push(performance.now() - startedAt);
+      batchDone++;
       el.setAttribute(STATE, "done");
       dropRing(el);
       flashDone(el);
     } catch (err) {
-      el.setAttribute(STATE, "error");
-      dropRing(el);
-      showErrorChip(el);
-      console.error("MT translate failed:", err);
+      if (err instanceof StaleBatch) {
+        // This page belonged to a run that has since been stopped or replaced.
+        // It is neither a success nor a failure: no state is written, so the
+        // page reads exactly as it did before the request, and nothing is added
+        // to the rolling translation context.
+        el.removeAttribute(STATE);
+        dropRing(el);
+        syncBatchHud();
+      } else {
+        batchError++;
+        el.setAttribute(STATE, "error");
+        dropRing(el);
+        showErrorChip(el);
+        console.error("MT translate failed:", err);
+      }
     } finally {
       queue.settle();
       syncHud();
@@ -339,7 +500,7 @@ async function pump(): Promise<void> {
   }
 }
 
-async function translateOne(el: Element): Promise<void> {
+async function translateOne(el: Element, batchId: string): Promise<void> {
   const url = resolveImageUrl(el);
   if (!url) throw new Error("no image URL");
   // prevContext is read NOW, immediately before dispatch, so page N+1 always
@@ -351,6 +512,12 @@ async function translateOne(el: Element): Promise<void> {
     pageUrl: location.href,
     prevContext,
   })) as TranslateResponse | { error: string };
+
+  // The guard sits at the first await boundary and before anything observable:
+  // a response that outlived its batch must not swap an image, must not publish
+  // a blob into the store, and above all must not push into `translations`,
+  // where it would become the prevContext of a page the user never stopped.
+  if (batchId !== activeBatchId) throw new StaleBatch();
   if ("error" in resp) throw new Error(resp.error);
 
   const blob = await composePage(resp, {
@@ -427,6 +594,22 @@ const mo = new MutationObserver((records) => {
       for (const node of rec.addedNodes) {
         for (const applied of applyStoredIn(node, store)) flashDone(applied);
       }
+      // A book-style reader mounts the next page on navigation and never emits a
+      // scroll event, so this observer is the only thing that notices. Guarded
+      // on an active batch so an idle page pays nothing for it.
+      if (batch) {
+        for (const node of rec.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          for (const el of scan(node, {
+            wholeDocument: enqueuesWholeDocument(readerMode),
+            padPx: VIEWPORT_PAD_PX,
+          })) {
+            const url = resolveImageUrl(el);
+            if (url) coverage.accept(url);
+            enqueue(el);
+          }
+        }
+      }
       for (const node of rec.removedNodes) {
         if (!(node instanceof Element)) continue;
         detachEl(node);
@@ -443,7 +626,10 @@ mo.observe(document.documentElement, {
   subtree: true,
 });
 
-/** Queue every un-translated candidate this trigger should reach. */
+/**
+ * Queue every un-translated candidate the current trigger should reach.
+ * Shared by the initial pass and by rediscovery, so both agree on what counts.
+ */
 function enqueueNearby(): void {
   for (const el of scan(document, {
     wholeDocument: enqueuesWholeDocument(readerMode),
@@ -457,12 +643,75 @@ function enqueueNearby(): void {
  * Alt+T and its forwarded command share this wrapper so a discovery pass that
  * found no new work says so: a keypress with zero visible effect reads as a
  * broken shortcut, not as "nothing needed translating".
+ *
+ * The confirmation happens here, before the first page is queued and therefore
+ * before the first paid request. A 33-page chapter prompts once, up front,
+ * rather than discovering the cost ten pages in.
  */
-function triggerNearby(): void {
+async function triggerNearby(): Promise<void> {
+  const found = scan(document, {
+    wholeDocument: enqueuesWholeDocument(readerMode),
+    padPx: VIEWPORT_PAD_PX,
+  });
+  const unique = new Map<string, Element>();
+  for (const el of found) {
+    const url = resolveImageUrl(el);
+    if (url) unique.set(url, el);
+  }
+  if (unique.size === 0) {
+    hud.flash(emptyView(), TTL_MS.empty);
+    return;
+  }
+
+  const next = new Batch(limits);
+  if (next.needsConsent(unique.size)) {
+    const ok = await hud.prompt(promptBatchConsent(unique.size, limits.maxPages));
+    if (!ok) return; // nothing was dispatched and nothing was charged
+    next.grantConsent(Math.max(1, unique.size - next.approvedLimit));
+  }
+
+  batch = next;
+  activeBatchId = next.id;
+  batchDurations = [];
+  batchDone = 0;
+  batchError = 0;
+  batchCapped = 0;
+  batchStopReason = null;
+  coverage = currentCoverage();
+
   const before = enqueues;
-  enqueueNearby();
-  if (enqueues === before) hud.flash(emptyView(), TTL_MS.empty);
+  seeding = true; // one pump at the end, not one per discovered page
+  for (const [url, el] of unique) {
+    coverage.accept(url);
+    enqueue(el);
+  }
+  seeding = false;
+  if (enqueues === before) {
+    hud.flash(emptyView(), TTL_MS.empty);
+    return;
+  }
+  void pump();
+  syncHud();
 }
+
+/**
+ * Re-scan while a batch is running.
+ *
+ * A reader that paginates mounts the next page's node on navigation and may
+ * never emit a scroll event, so the existing MutationObserver covers that case
+ * and this passive capture-phase listener covers the scroll case. Both only
+ * observe: nothing here clicks, turns a page, or scrolls on the user's behalf.
+ */
+function onPossibleRediscovery(): void {
+  if (!batch) return;
+  for (const el of scan(document, {
+    wholeDocument: enqueuesWholeDocument(readerMode),
+    padPx: VIEWPORT_PAD_PX,
+  })) {
+    enqueue(el);
+  }
+}
+window.addEventListener("scroll", onPossibleRediscovery, { capture: true, passive: true });
 
 /** Every image in the error state, re-queued through the normal enqueue path. */
 function retryErrors(): void {

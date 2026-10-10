@@ -57,6 +57,7 @@ export function trackCoverage(): {
   accept(url: string): void;
   finishTraversal(): void;
   state(): Coverage;
+  size(): number;
 } {
   const seen = new Set<string>();
   let finished = false;
@@ -74,6 +75,10 @@ export function trackCoverage(): {
     },
     state(): Coverage {
       return finished ? "complete" : "progressive";
+    },
+    /** Distinct pages observed. This is what the HUD may present as a total. */
+    size(): number {
+      return seen.size;
     },
   };
 }

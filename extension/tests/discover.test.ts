@@ -292,6 +292,32 @@ describe("TranslateQueue with background elements", () => {
   });
 });
 
+describe("TranslateQueue.clear", () => {
+  it("drops queued work but leaves the in-flight job alone", () => {
+    // Stop clears the remainder; the in-flight page is reverted by content.ts,
+    // not by the queue, so clear() must not strand it with nothing to settle.
+    const a = img({ src: "/1.jpg" });
+    const b = img({ src: "/2.jpg" });
+    const q = new TranslateQueue();
+    q.enqueue(a);
+    q.enqueue(b);
+    expect(q.dequeue()).toBe(a);
+    q.clear();
+    expect(q.size).toBe(0);
+    expect(q.inFlight).toBe(true);
+    q.settle();
+    expect(q.inFlight).toBe(false);
+  });
+
+  it("lets a fresh page be enqueued after a stop", () => {
+    const q = new TranslateQueue();
+    q.enqueue(img({ src: "/1.jpg" }));
+    q.clear();
+    q.enqueue(img({ src: "/2.jpg" }));
+    expect(q.size).toBe(1);
+  });
+});
+
 describe("banner rejection", () => {
   it("rejects a 4:1 landscape banner sized intrinsically", () => {
     const el = img({ src: "/ad.jpg", width: "1200", height: "300" });
