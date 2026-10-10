@@ -6,6 +6,7 @@ import {
   TranslateQueue,
 } from "./discover";
 import { composePage } from "./render";
+import { scan } from "./discovery";
 import { applyStored as applyStoredPage, applyStoredIn, swapIn } from "./apply";
 import { loadSettings } from "./settings";
 import { TranslationStore } from "./store";
@@ -444,19 +445,10 @@ mo.observe(document.documentElement, {
 
 /** Queue every un-translated candidate this trigger should reach. */
 function enqueueNearby(): void {
-  // Background-carried pages have no dedicated tag and carry no state
-  // attributes before their first translation, so the selector also matches
-  // any element whose inline style declares background-image — the only place
-  // a page bitmap can live for the paths this extension reads.
-  const wholeDocument = enqueuesWholeDocument(readerMode);
-  for (const el of document.querySelectorAll("img, [style*=\"background-image\"]")) {
-    if (!isMangaCandidate(el)) continue;
-    if (!wholeDocument) {
-      // Feeds and forums: stay near the viewport. A wider pass here would enqueue
-      // every image the user has ever scrolled past in a channel.
-      const r = el.getBoundingClientRect();
-      if (r.bottom < -VIEWPORT_PAD_PX || r.top > window.innerHeight + VIEWPORT_PAD_PX) continue;
-    }
+  for (const el of scan(document, {
+    wholeDocument: enqueuesWholeDocument(readerMode),
+    padPx: VIEWPORT_PAD_PX,
+  })) {
     enqueue(el);
   }
 }
