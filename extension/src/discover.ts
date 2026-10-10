@@ -3,6 +3,11 @@
 
 const LAZY_ATTRS = ["data-src", "data-lazy-src", "data-original", "data-hi-res-src"];
 const MIN_EDGE = 100; // icons/ads live below this; manga pages are far above.
+// Anything landscape and wider than this is reader chrome (ad slots, vote bars,
+// site banners), not a page. A webtoon panel can legitimately sit at exactly
+// 3:1, so the comparison is strict and the bound is deliberately not "widest
+// real page we have seen" — that would shrink the rule as sites change.
+const BANNER_ASPECT = 3;
 const STATE_ATTR = "data-mt-state";
 // Set while our own translated blob is on screen, and the only thing that
 // distinguishes it from a page-owned blob (both carry the page's origin).
@@ -108,6 +113,14 @@ function knownSize(el: HTMLImageElement): { w: number; h: number } | null {
   return w > 0 && h > 0 ? { w, h } : null;
 }
 
+/**
+ * A zero dimension means "not laid out yet", which is a visibility question for
+ * `isVisibleCandidate` at dispatch time, not evidence of a banner.
+ */
+function isBanner(w: number, h: number): boolean {
+  return w > 0 && h > 0 && w / h > BANNER_ASPECT;
+}
+
 export function isMangaCandidate(el: Element): boolean {
   if (el.getAttribute(STATE_ATTR) === "pending" || el.getAttribute(STATE_ATTR) === "done") {
     return false;
@@ -118,11 +131,19 @@ export function isMangaCandidate(el: Element): boolean {
     // only size signal available, and the same edge also keeps small decorated
     // divs (buttons, separators) out of the queue.
     const r = el.getBoundingClientRect();
-    return r.width >= MIN_EDGE && r.height >= MIN_EDGE;
+    if (!(r.width >= MIN_EDGE && r.height >= MIN_EDGE)) return false;
+    return !isBanner(r.width, r.height);
   }
   const size = knownSize(el);
-  if (!size) return true; // unloaded lazy image: size decides at dispatch time
-  return Math.max(size.w, size.h) >= MIN_EDGE && Math.min(size.w, size.h) >= MIN_EDGE;
+  if (!size) {
+    // Unloaded lazy image: size decides at dispatch time. The rect is still
+    // worth judging, because a reader that never sets width/height attributes
+    // would otherwise leave wide banners in the queue forever.
+    const r = el.getBoundingClientRect();
+    return !isBanner(r.width, r.height);
+  }
+  if (Math.max(size.w, size.h) < MIN_EDGE || Math.min(size.w, size.h) < MIN_EDGE) return false;
+  return !isBanner(size.w, size.h);
 }
 
 /**

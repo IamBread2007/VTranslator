@@ -291,3 +291,43 @@ describe("TranslateQueue with background elements", () => {
     q.settle();
   });
 });
+
+describe("banner rejection", () => {
+  it("rejects a 4:1 landscape banner sized intrinsically", () => {
+    const el = img({ src: "/ad.jpg", width: "1200", height: "300" });
+    expect(isMangaCandidate(el)).toBe(false);
+  });
+
+  it("rejects a 4:1 landscape banner measured from its rendered box", () => {
+    // No width/height attributes, so only the rect can catch it. Without this
+    // the rule would silently not apply on a reader that sets no intrinsic size.
+    const el = renderedEl(img({ src: "/ad.jpg" }), 1200, 300);
+    expect(isMangaCandidate(el)).toBe(false);
+  });
+
+  it("rejects a 4:1 background banner", () => {
+    const el = renderedEl(bgDiv('url("blob:https://reader.example/ad")'), 1200, 300);
+    expect(isMangaCandidate(el)).toBe(false);
+  });
+
+  it("accepts a legitimate wide panel at exactly 3:1", () => {
+    // Review Focus #2: the bound is exclusive, so 3:1 itself stays a page. Both
+    // size sources are pinned, since a `>=` slip would only break one of them.
+    expect(isMangaCandidate(img({ src: "/wide.jpg", width: "900", height: "300" }))).toBe(true);
+    expect(isMangaCandidate(renderedEl(img({ src: "/wide.jpg" }), 900, 300))).toBe(true);
+  });
+
+  it("never rejects a portrait page however narrow", () => {
+    expect(isMangaCandidate(img({ src: "/tall.jpg", width: "200", height: "2400" }))).toBe(true);
+  });
+
+  it("does not reject an unloaded box for having zero height", () => {
+    // Zero height means "not yet laid out", which is isVisibleCandidate's gate.
+    expect(isMangaCandidate(renderedEl(img({ src: "/page.jpg" }), 800, 0))).toBe(true);
+    expect(isMangaCandidate(img({ src: "/page.jpg" }))).toBe(true);
+  });
+
+  it("accepts every real MangaDex page shape, including a 367px-wide page", () => {
+    expect(isMangaCandidate(renderedEl(img({ src: "blob:https://mangadex.org/x" }), 367, 640))).toBe(true);
+  });
+});
