@@ -131,15 +131,40 @@ describe("TranslateQueue", () => {
     expect(q.size).toBe(0);
   });
 
-  it("dedupes same element+URL, keeps distinct elements of same URL", () => {
+  it("dedupes on the URL, so one page never costs two translations", () => {
     const a = img({ src: "/same.jpg" });
     const b = img({ src: "/same.jpg" });
     const q = new TranslateQueue();
     q.enqueue(a);
     q.enqueue(a); // double-observe of the same element must not double-queue
     expect(q.size).toBe(1);
-    q.enqueue(b); // two page slots sharing one URL are two translations
-    expect(q.size).toBe(2);
+    // Two page slots sharing one URL are the same bitmap. Translating it twice
+    // would pay the full LLM cost again for an identical result, and in a paged
+    // reader MangaDex genuinely mounts two nodes for one page.
+    q.enqueue(b);
+    expect(q.size).toBe(1);
+  });
+
+  it("still queues the same node again after the reader swaps its source", () => {
+    const el = img({ src: "/p1.jpg" });
+    const q = new TranslateQueue();
+    q.enqueue(el);
+    expect(q.dequeue()).toBe(el);
+    q.settle();
+    // The site republished the node with a different bitmap; that is new work.
+    el.setAttribute("src", "/p2.jpg");
+    q.enqueue(el);
+    expect(q.size).toBe(1);
+  });
+
+  it("does not queue a URL that is already in flight", () => {
+    const a = img({ src: "/same.jpg" });
+    const b = img({ src: "/same.jpg" });
+    const q = new TranslateQueue();
+    q.enqueue(a);
+    expect(q.dequeue()).toBe(a);
+    q.enqueue(b); // same page, different node, while the first is running
+    expect(q.size).toBe(0);
   });
 
   it("gives manual jobs priority without parallel dispatch", () => {

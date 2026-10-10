@@ -90,3 +90,36 @@ describe("settings storage split", () => {
     expect(s).toEqual(DEFAULTS);
   });
 });
+
+describe("readerModes storage", () => {
+  beforeEach(() => {
+    areas = makeChrome();
+  });
+
+  it("round-trips a per-site reader mode through sync", async () => {
+    await saveSettings({ ...DEFAULTS, readerModes: { "mangadex.org": "paged" } });
+    expect((await loadSettings()).readerModes).toEqual({ "mangadex.org": "paged" });
+  });
+
+  it("drops `auto` entries so unconfigured sites stay out of the record", async () => {
+    // `auto` is the default for every host; persisting it would grow the synced
+    // record without changing any behaviour.
+    await chrome.storage.sync.set({ readerModes: { "example.org": "auto" } });
+    expect((await loadSettings()).readerModes).toEqual({});
+  });
+
+  it("discards unrecognised modes rather than widening discovery by accident", async () => {
+    await chrome.storage.sync.set({ readerModes: { "example.org": "sideways" } });
+    expect((await loadSettings()).readerModes).toEqual({});
+  });
+
+  it("normalises a www host so the entry still matches the reader", async () => {
+    await chrome.storage.sync.set({ readerModes: { "www.mangadex.org": "paged" } });
+    expect((await loadSettings()).readerModes).toEqual({ "mangadex.org": "paged" });
+  });
+
+  it("survives a readerModes value that is not an object", async () => {
+    await chrome.storage.sync.set({ readerModes: "paged" });
+    expect((await loadSettings()).readerModes).toEqual({});
+  });
+});
