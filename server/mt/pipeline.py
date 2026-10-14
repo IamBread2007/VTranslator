@@ -21,7 +21,9 @@ from .ocr import (
     OcrEngine,
     choose_engine,
     crop_with_padding,
+    is_junk,
     make_probe,
+    read_crop,
     resolve_source_lang,
     select_probe_crops,
 )
@@ -31,7 +33,7 @@ from .translator import PROMPT_VERSION
 # v3: PP-OCRv5 mobile det/rec replaced server models (CPU speed), CUDA torch.
 # v4: pt added, which routes to latin_PP-OCRv5_mobile_rec instead of the
 #     chinese-dict probe; v3 perception entries for pt pages use the wrong model.
-PIPELINE_VERSION = "4"
+PIPELINE_VERSION = "5"
 BUBBLE_SHRINK = 0.12
 TEXT_KINDS = ("text_bubble", "text_free")
 
@@ -140,13 +142,13 @@ class Pipeline:
     def _perceive(self, page: Image.Image, requested: str) -> tuple[dict, bytes]:
         found = self.detector.detect(page)
         bubbles = [b for b, k, _ in found if k == "bubble"]
-        texts = [(b, k) for b, k, _ in found if k in TEXT_KINDS]
+        texts = [(b, k, s) for b, k, s in found if k in TEXT_KINDS]
         if not texts:
             lang = requested if requested != "auto" else "ja"
             meta = {"lang": lang, "warnings": ["no text detected"], "blocks": []}
             return meta, _png_bytes(page)
 
-        probe_boxes = select_probe_crops([b for b, _ in texts], page.height)
+        probe_boxes = select_probe_crops([b for b, _, _ in texts], page.height)
         crops = [crop_with_padding(page, b) for b in probe_boxes]
         res = resolve_source_lang(
             crops,
@@ -157,9 +159,9 @@ class Pipeline:
         engine = self.get_ocr(choose_engine(self.ocr_engine, res.lang))
 
         read: list[tuple[Box, str, str]] = []
-        for box, kind in texts:
-            text = engine.read(crop_with_padding(page, box)).text.strip()
-            if text:
+        for box, kind, score in texts:
+            text = read_crop(engine, page, box).text.strip()
+            if text and not is_junk(text, kind, score):
                 read.append((box, kind, text))
 
         order = sort_reading_order([b for b, _, _ in read], rtl=res.lang == "ja")

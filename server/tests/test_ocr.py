@@ -4,6 +4,9 @@ from mt.ocr import (
     choose_engine,
     classify_scripts,
     crop_with_padding,
+    is_junk,
+    pad_for_crop,
+    padded_crop,
     resolve_from_probe,
     resolve_source_lang,
     select_probe_crops,
@@ -156,3 +159,67 @@ def test_korean_probe_never_pins_model_names():
 
     assert set(PADDLE_MODELS) <= set(PADDLE_ARGS)
     assert "paddle:korean" not in PADDLE_MODELS
+
+def test_pad_for_crop_scales_with_box_with_floor_of_eight():
+    assert pad_for_crop(Box(x=0, y=0, w=100, h=50)) == 8  # 0.08*50=4 -> floor 8
+    assert pad_for_crop(Box(x=0, y=0, w=400, h=300)) == 24  # 0.08*300
+
+def test_short_bubble_dialogue_is_kept():
+    assert is_junk("え?", "text_bubble", 0.61) is False
+    assert is_junk("あっ", "text_bubble", 0.9) is False
+    assert is_junk("ああ", "text_bubble", 0.9) is False
+    assert is_junk("네?", "text_bubble", 0.9) is False
+
+def test_symbol_noise_is_rejected():
+    assert is_junk("///", "text_bubble", 0.9) is True
+    assert is_junk("111", "text_bubble", 0.9) is True
+    assert is_junk("///", "text_free", 0.4) is True
+
+def test_strict_filter_only_for_low_confidence_text_free():
+    assert is_junk("え?", "text_free", 0.4) is True
+    assert is_junk("えっと", "text_free", 0.4) is False
+
+def test_padded_crop_replicates_edges_outside_page():
+    img = Image.new("RGB", (100, 100), (10, 20, 30))
+    c = padded_crop(img, Box(x=0, y=0, w=10, h=10))
+    assert c.size == (10 + 8 + 8, 10 + 8 + 8)
+    assert c.getpixel((0, 0)) == (10, 20, 30)
+
+class _ScriptedEngine:
+    """Returns a canned confidence per call so the invert retry can be observed."""
+
+    def __init__(self, confidences):
+        self.confidences = list(confidences)
+        self.seen = []
+
+    def read(self, crop):
+        from mt.ocr import OcrResult
+
+        self.seen.append(crop.copy())
+        return OcrResult(text="x", confidence=self.confidences.pop(0))
+
+def test_read_crop_retries_inverted_when_low_confidence_on_dark_bubble():
+    from mt.ocr import read_crop
+
+    page = Image.new("RGB", (60, 60), (20, 20, 20))
+    eng = _ScriptedEngine([0.3, 0.9])
+    out = read_crop(eng, page, Box(x=10, y=10, w=30, h=30))
+    assert out.confidence == 0.9
+    assert len(eng.seen) == 2
+    assert eng.seen[1].getpixel((0, 0)) == (255 - 20, 255 - 20, 255 - 20)
+
+def test_read_crop_keeps_first_read_when_confident():
+    from mt.ocr import read_crop
+
+    page = Image.new("RGB", (60, 60), (20, 20, 20))
+    eng = _ScriptedEngine([0.9])
+    assert read_crop(eng, page, Box(x=10, y=10, w=30, h=30)).confidence == 0.9
+    assert len(eng.seen) == 1
+
+def test_read_crop_skips_invert_on_light_background():
+    from mt.ocr import read_crop
+
+    page = Image.new("RGB", (60, 60), (240, 240, 240))
+    eng = _ScriptedEngine([0.3])
+    read_crop(eng, page, Box(x=10, y=10, w=30, h=30))
+    assert len(eng.seen) == 1

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .schemas import Box
 
@@ -17,6 +17,7 @@ Evidence = Literal["high", "medium", "low", "explicit"]
 Probe = Callable[[list[Image.Image]], tuple[str, float | None]]
 
 JUNK_THRESHOLD = 0.5
+BUBBLE_KEEP_SCORE = 0.60
 MIN_SCRIPT_CHARS = 3
 MIN_SCRIPT_RATIO = 0.15
 LATIN_RATIO = 0.8
@@ -62,6 +63,81 @@ def crop_with_padding(img: Image.Image, box: Box, pad: int = 4) -> Image.Image:
     x1 = min(img.width, box.x + box.w + pad)
     y1 = min(img.height, box.y + box.h + pad)
     return img.crop((x0, y0, x1, y1))
+
+
+# Tight crops clip glyphs that touch the bubble border, which PP-OCRv5 then
+# misreads; the margin scales with the box so small bubbles still get room.
+PAD_MIN = 8
+PAD_RATIO = 0.08
+# Bright text on a dark bubble only reads reliably after inversion; the retry
+# runs only on low-confidence reads so the common case costs one OCR call.
+INVERT_CONFIDENCE = 0.65
+DARK_BACKGROUND_LUMA = 128
+
+
+def pad_for_crop(box: Box) -> int:
+    return max(PAD_MIN, int(min(box.w, box.h) * PAD_RATIO))
+
+
+def padded_crop(img: Image.Image, box: Box) -> Image.Image:
+    """Crop with `pad_for_crop` margin; out-of-page margin repeats edge pixels.
+
+    Black or white fill would read as a bubble border to the OCR model, so the
+    edge is replicated, matching cv2.BORDER_REPLICATE.
+    """
+    pad = pad_for_crop(box)
+    x0, y0 = box.x - pad, box.y - pad
+    x1, y1 = box.x + box.w + pad, box.y + box.h + pad
+    inside = img.crop(
+        (
+            max(0, x0),
+            max(0, y0),
+            min(img.width, x1),
+            min(img.height, y1),
+        )
+    )
+    arr = np.asarray(inside)
+    before_x, after_x = max(0, -x0), max(0, x1 - img.width)
+    before_y, after_y = max(0, -y0), max(0, y1 - img.height)
+    if before_x or after_x or before_y or after_y:
+        arr = np.pad(
+            arr,
+            ((before_y, after_y), (before_x, after_x), (0, 0)),
+            mode="edge",
+        )
+    return Image.fromarray(arr)
+
+
+def _mean_luma(img: Image.Image) -> float:
+    return float(np.asarray(img.convert("L")).mean())
+
+
+def read_crop(engine: "OcrEngine", page: Image.Image, box: Box) -> OcrResult:
+    crop = padded_crop(page, box)
+    first = engine.read(crop)
+    if first.confidence is None or first.confidence >= INVERT_CONFIDENCE:
+        return first
+    if _mean_luma(crop) >= DARK_BACKGROUND_LUMA:
+        return first
+    retry = engine.read(ImageOps.invert(crop))
+    if retry.confidence is not None and retry.confidence > first.confidence:
+        return retry
+    return first
+
+
+def is_junk(text: str, kind: str, det_score: float) -> bool:
+    """Drop OCR output with no real script content; keep short bubble exclamations.
+
+    Short dialogue ("え?", "네?") is a complete utterance inside a confident
+    bubble, so a single letter is enough there. Free-floating text needs three
+    letters because background line art is often detected as text.
+    """
+    alpha = classify_scripts(text)["alphabetic"]
+    if alpha == 0:
+        return True
+    if kind == "text_bubble" and det_score >= BUBBLE_KEEP_SCORE:
+        return False
+    return alpha < MIN_SCRIPT_CHARS
 
 
 # Latin-script source languages share one recogniser: PP-OCRv5 maps pt, es and
