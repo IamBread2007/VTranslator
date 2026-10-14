@@ -212,3 +212,57 @@ def test_translate_async_returns_empty_without_calling_the_llm():
 
     assert asyncio.run(run()) == {}
     assert calls == []
+
+
+def test_som_builds_single_annotated_image_under_edge_cap():
+    from mt.translator import build_som_image
+
+    page = Image.new("RGB", (800, 1200), "white")
+    som = build_som_image(
+        page, [(1, Box(x=10, y=10, w=50, h=80)), (2, Box(x=300, y=600, w=120, h=60))]
+    )
+    assert isinstance(som, Image.Image)
+    assert max(som.size) <= 1600
+
+
+def test_som_draws_red_outline_for_each_region():
+    from mt.translator import build_som_image
+
+    page = Image.new("RGB", (400, 400), "white")
+    som = build_som_image(page, [(1, Box(x=50, y=50, w=100, h=100))])
+    # Outline colour must appear on the box edge, not inside the empty interior.
+    assert som.getpixel((50, 100))[0] > 150
+    assert som.getpixel((100, 100)) == (255, 255, 255)
+
+
+def test_parse_accepts_glossary_object_and_returns_translations_only():
+    raw = (
+        '{"translations":[{"id":1,"text":"x"}],'
+        '"glossary":[{"term":"A","translation":"B","note":"anh-em"}]}'
+    )
+    assert parse_translations(raw, {1}) == {1: "x"}
+
+
+def test_parse_glossary_is_exposed_separately():
+    from mt.translator import parse_glossary
+
+    raw = '{"translations":[],"glossary":[{"term":"A","translation":"B","note":"n"}]}'
+    assert parse_glossary(raw) == [{"term": "A", "translation": "B", "note": "n"}]
+
+
+def test_parse_glossary_caps_at_thirty_and_drops_malformed():
+    from mt.translator import parse_glossary
+
+    entries = [{"term": f"t{i}", "translation": "v", "note": ""} for i in range(40)]
+    entries.append({"term": 5})  # malformed: non-string term
+    raw = json.dumps({"translations": [], "glossary": entries})
+    out = parse_glossary(raw)
+    assert len(out) == 30
+    assert all(isinstance(e["term"], str) for e in out)
+
+
+def test_parse_glossary_missing_returns_empty():
+    from mt.translator import parse_glossary
+
+    assert parse_glossary('{"translations":[{"id":1,"text":"x"}]}') == []
+    assert parse_glossary("garbage") == []

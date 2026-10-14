@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from .geometry import tile_ranges
 from .schemas import Box
 
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 MAX_EDGE = 1600
 MAX_VISION_IMAGES = 12
 JPEG_QUALITY = 85
@@ -42,8 +42,11 @@ labeled region. Rules:
   characters' relationship and tone.
 - Keep proper names consistent with the previous context.
 - Translate concisely so the text fits inside its bubble.
-- Output ONLY JSON: {"translations":[{"id":<int>,"text":"<translation>"}]}
-  with one entry per given id."""
+- Keep a glossary of recurring names, terms and the address pronouns chosen for each
+  speaker pair, so later pages stay consistent.
+- Output ONLY JSON: {"translations":[{"id":<int>,"text":"<translation>"}],
+  "glossary":[{"term":"<source>","translation":"<vi>","note":"<pronoun or context>"}]}
+  with one translation per given id. "glossary" may be empty."""
 
 
 class TranslationError(RuntimeError):
@@ -79,6 +82,26 @@ def annotate_region(
         draw.rectangle((x, y, x + lw, y + lh), fill=(200, 0, 0), outline=(0, 0, 0))
         draw.text((x + 4 - left, y + 3 - t), label, fill=(255, 255, 255), font=font)
     return out
+
+
+def build_som_image(
+    page: Image.Image, blocks: Sequence[tuple[int, Box]]
+) -> Image.Image:
+    """One page image with a red outline and `[n]` label per region (Set-of-Mark).
+
+    Labels let the model refer to a region by id from its position in the page,
+    so it can tell speakers apart without reading the OCR text first. The longest
+    edge is capped at MAX_EDGE so the page stays within the vision payload limit.
+    """
+    out = page.convert("RGB").copy()
+    draw = ImageDraw.Draw(out)
+    for _, box in blocks:
+        draw.rectangle(
+            (box.x, box.y, box.x + box.w, box.y + box.h),
+            outline=(230, 30, 30),
+            width=max(2, out.width // 400),
+        )
+    return resize_max_edge(annotate_region(out, blocks))
 
 
 def _vertical_tiles(width: int, height: int) -> tuple[list[tuple[int, int]], bool]:
@@ -192,6 +215,40 @@ def parse_translations(raw: str, valid_ids: set[int]) -> dict[int, str]:
         text = e.get("text")
         if bid in valid_ids and isinstance(text, str) and text.strip():
             out[bid] = text.strip()
+    return out
+
+
+GLOSSARY_CAP = 30
+
+
+def parse_glossary(raw: str) -> list[dict[str, str]]:
+    """Glossary entries from a translation reply, capped and type-checked.
+
+    A reply without a glossary (older prompt or translations-only output) yields
+    an empty list, so glossary loss never fails a translation. Entries whose term
+    or translation is not a string are dropped so the stored context stays clean.
+    """
+    obj = _extract_obj(raw or "")
+    entries = obj.get("glossary") if obj else None
+    if not isinstance(entries, list):
+        return []
+    out: list[dict[str, str]] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        term, tr = e.get("term"), e.get("translation")
+        if not (isinstance(term, str) and isinstance(tr, str) and term.strip()):
+            continue
+        note = e.get("note")
+        out.append(
+            {
+                "term": term.strip(),
+                "translation": tr.strip(),
+                "note": note.strip() if isinstance(note, str) else "",
+            }
+        )
+        if len(out) == GLOSSARY_CAP:
+            break
     return out
 
 
