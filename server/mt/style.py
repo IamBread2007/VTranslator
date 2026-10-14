@@ -41,12 +41,54 @@ def _two_colors(crop: Image.Image) -> tuple[np.ndarray, np.ndarray]:
     return centers[fg], centers[1 - fg]
 
 
-def estimate_style(page: Image.Image, box: Box, kind: str, line_count: int) -> Style:
-    """Estimate text style from the ORIGINAL (not inpainted) page."""
+def _mask_colors(
+    rgb: np.ndarray, mask: np.ndarray
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Glyph fill and surround colours from a text mask, or None if the mask is empty.
+
+    Erosion trims anti-aliased edges so the fill is pure glyph colour. A 1px stroke
+    vanishes under erosion, so the un-eroded mask is the fallback. The surround is
+    a ring just outside the glyphs, so it excludes the glyph and any stroke inside.
+    """
+    binary = (mask > 0).astype(np.uint8)
+    if not binary.any():
+        return None
+    core = cv2.erode(binary, np.ones((3, 3), np.uint8))
+    if not core.any():
+        core = binary
+    ring = cv2.dilate(binary, np.ones((5, 5), np.uint8)) - cv2.dilate(
+        binary, np.ones((2, 2), np.uint8)
+    )
+    fg = np.median(rgb[core.astype(bool)], axis=0)
+    if ring.any():
+        bg = np.median(rgb[ring.astype(bool)], axis=0)
+    else:
+        bg = np.median(rgb.reshape(-1, 3), axis=0)
+    return fg.astype(np.float32), bg.astype(np.float32)
+
+
+def estimate_style(
+    page: Image.Image,
+    box: Box,
+    kind: str,
+    line_count: int,
+    mask_roi: np.ndarray | None = None,
+) -> Style:
+    """Estimate text style from the ORIGINAL (not inpainted) page.
+
+    With `mask_roi` (text pixels in page coordinates), the glyph colour comes from
+    the mask rather than k-means over the whole crop, so a bubble's fill or outline
+    does not dilute the text colour. K-means remains the fallback for no mask.
+    """
     x0, y0 = max(box.x, 0), max(box.y, 0)
     x1, y1 = min(box.x + box.w, page.width), min(box.y + box.h, page.height)
     crop = page.crop((x0, y0, max(x1, x0 + 1), max(y1, y0 + 1)))
-    fg, bg = _two_colors(crop)
+    colors = None
+    if mask_roi is not None:
+        roi = mask_roi[y0 : y0 + crop.height, x0 : x0 + crop.width]
+        if roi.shape == (crop.height, crop.width):
+            colors = _mask_colors(np.asarray(crop.convert("RGB"), np.float32), roi)
+    fg, bg = colors if colors is not None else _two_colors(crop)
     fg, bg = _snap(fg), _snap(bg)
 
     dark_bg = _luma(bg) < DARK_LUMA

@@ -17,6 +17,7 @@ from PIL import Image, UnidentifiedImageError
 
 from .cache import StageCache, make_key, normalize_context
 from .geometry import contains, sort_reading_order
+from .inpaint import text_mask
 from .ocr import (
     OcrEngine,
     choose_engine,
@@ -33,7 +34,7 @@ from .translator import PROMPT_VERSION
 # v3: PP-OCRv5 mobile det/rec replaced server models (CPU speed), CUDA torch.
 # v4: pt added, which routes to latin_PP-OCRv5_mobile_rec instead of the
 #     chinese-dict probe; v3 perception entries for pt pages use the wrong model.
-PIPELINE_VERSION = "6"
+PIPELINE_VERSION = "7"
 BUBBLE_SHRINK = 0.12
 TEXT_KINDS = ("text_bubble", "text_free")
 
@@ -70,7 +71,7 @@ class Translator(Protocol):
     ) -> dict[int, str]: ...
 
 
-StyleFn = Callable[[Image.Image, Box, str, int], Style]
+StyleFn = Callable[..., Style]
 
 
 def shrink_box(box: Box, frac: float = BUBBLE_SHRINK) -> Box:
@@ -165,13 +166,18 @@ class Pipeline:
                 read.append((box, kind, text))
 
         order = sort_reading_order([b for b, _, _ in read], rtl=res.lang == "ja")
+        # Glyph pixels come from the mask, computed once per page on the original image.
+        page_mask = text_mask(page, [b for b, _, _ in read])
         blocks: list[dict] = []
         for n, idx in enumerate(order, start=1):
             box, kind, text = read[idx]
             parent = next((bb for bb in bubbles if contains(bb, box)), None)
             render = shrink_box(parent) if parent else box
-            # Style MUST be measured on the original page, before inpainting.
-            style = self.style_estimator(page, box, kind, text.count("\n") + 1)
+            # Style MUST be measured on the original page, before inpainting; the
+            # mask only selects which pixels inside that page are glyphs.
+            style = self.style_estimator(
+                page, box, kind, text.count("\n") + 1, mask_roi=page_mask
+            )
             blocks.append(
                 {
                     "id": n,

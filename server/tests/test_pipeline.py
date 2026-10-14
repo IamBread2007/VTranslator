@@ -30,7 +30,7 @@ class FakeTr:
         self.calls = 0
         self.reply = reply
 
-    def translate(self, img, items, src, tgt, ctx, warnings=None):
+    def translate(self, page, items, src, tgt, prev_context, warnings=None):
         self.calls += 1
         return {items[0][0]: self.reply} if self.reply else {}
 
@@ -100,7 +100,7 @@ def test_no_text_skips_llm(tmp_path):
 def test_style_is_measured_before_inpaint(tmp_path):
     seen = {}
 
-    def style_fn(page, box, kind, line_count):
+    def style_fn(page, box, kind, line_count, mask_roi=None):
         seen["pixel"] = page.getpixel((0, 0))
         return fake_style()
 
