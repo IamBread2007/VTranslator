@@ -34,7 +34,7 @@ import {
 } from "./hudstate";
 import { createHud } from "./hud";
 import { OverlayLayer } from "./overlay";
-import { Batch } from "./batch";
+import { Batch, newBatchId } from "./batch";
 import { trackCoverage } from "./discovery";
 import { DEFAULTS } from "./settings";
 import type { TranslateResponse } from "./types";
@@ -95,11 +95,19 @@ let enqueues = 0;
  */
 let activeBatchId = "";
 let batch: Batch | null = null;
+/** Non-empty while a solo (hover/retry/context) run owns the queue. */
+let soloRunId = "";
 let batchDurations: number[] = [];
 let batchDone = 0;
 let batchError = 0;
 let capReached = false;
 let batchStopReason: "capped" | "declined" | "user" | null = null;
+/**
+ * URL the batch was started on. MangaDex is an SPA: moving to another chapter does
+ * not reload the page, so a live batch can outlive the chapter it was built for.
+ * Comparing the URL is how enqueue() detects that and stops mixing chapters.
+ */
+let batchUrl = "";
 
 /**
  * One pump per tab. Two loops would fight over the queue's single in-flight slot
@@ -140,41 +148,34 @@ let coverage = currentCoverage();
  * paid for them. Only the waiting queue is dropped, and only the in-flight page
  * is left for pump() to revert.
  */
+function stopSolo(): void {
+  const stoppingId = soloRunId;
+  queue.clear();
+  soloRunId = "";
+  hud.setStop(false);
+  syncHud();
+  if (!stoppingId) return;
+  try {
+    void chrome.runtime.sendMessage({ type: "mt-stop", batchId: stoppingId });
+  } catch {
+    // The worker can already be asleep; the tab-side stop above still stands.
+  }
+}
+
 function stopBatch(reason: "capped" | "declined" | "user"): void {
   batchStopReason = reason;
   queue.clear();
-  hideStopButton();
+  soloRunId = "";
+  hud.setStop(false);
   // Retiring the id is what invalidates any response still in flight.
   activeBatchId = "";
   batch = null;
   syncBatchHud();
 }
 
-// A batch can be a few dozen pages, so it needs a control that stops it without
-// waiting for it to reach the cap or run out of pages. It lives in the fixed
-// layer rather than inside the progress pill because the pill is anchored to an
-// image that may scroll out of view mid-batch.
-let stopBtn: HTMLButtonElement | null = null;
-
-function showStopButton(): void {
-  if (stopBtn || !batch) return;
-  const btn = document.createElement("button");
-  btn.type = "button";
-  // The same marker the integration tests use to detect the content script.
-  btn.dataset.mtHud = "";
-  btn.textContent = "Dừng";
-  btn.style.cssText =
-    "position:fixed;right:16px;bottom:16px;z-index:2147483647;padding:8px 14px;" +
-    "font:14px sans-serif;background:#b3261e;color:#fff;border:0;border-radius:6px;cursor:pointer";
-  btn.addEventListener("click", () => void userStopBatch());
-  stopBtn = btn;
-  document.body.appendChild(btn);
-}
-
-function hideStopButton(): void {
-  stopBtn?.remove();
-  stopBtn = null;
-}
+// The stop control lives inside the status pill (hud.setStop) rather than as a
+// separate fixed button: the two shared one corner and overlapped, and hover /
+// retry / context entries never opened a batch, so they never showed a control.
 
 /**
  * Stop the run and tell the worker to abandon the request in flight.
@@ -184,6 +185,11 @@ function hideStopButton(): void {
  * which upstream call to cancel.
  */
 async function userStopBatch(): Promise<void> {
+  // Alt+S during a solo hover run: no batch exists, but the solo id does.
+  if (soloRunId && !batch) {
+    stopSolo();
+    return;
+  }
   const stoppingId = activeBatchId;
   stopBatch("user");
   if (!stoppingId) return;
@@ -194,13 +200,42 @@ async function userStopBatch(): Promise<void> {
   }
 }
 
-/** The queue drained with no stop: retire the batch but keep the summary. */
+/**
+ * The pump loop drained: retire the batch and show the final summary.
+ *
+ * When the user already stopped the batch (`stopBatch` sets `batch = null`
+ * earlier), this function is still reached at the end of pump's `while(true)`.
+ * It must clear `batchStopReason` and flash the summary so the HUD does not
+ * keep showing "đang dịch" forever.
+ */
 function finishBatch(): void {
-  if (!batch) return;
+  if (batch) {
+    // Render first, while `batch` is still alive, so syncBatchHud takes the batch
+    // branch: it shows the waiting view or the terminal tally, and never leaves the
+    // last "running" view on screen.
+    syncBatchHud();
+    // Pages the reader has not laid out yet are still owed. Retiring now would drop
+    // the consent envelope and the stop control while the chapter is partly done.
+    if (batchDone + batchError < coverage.size()) return;
+  }
+  if (!batch) {
+    // stopBatch() already nulled `batch` but left `batchStopReason` alive so
+    // syncBatchHud could show "stopped" state while pump was still draining.
+    // Now that pump has drained, flash the final summary THEN retire the reason.
+    if (batchStopReason) {
+      // A stopped batch always routes to hud.flash(summarizeBatch(view)), so
+      // this shows the stopped summary once, with no spinner.
+      syncBatchHud();
+      batchStopReason = null;
+    }
+    soloRunId = "";
+    hud.setStop(false);
+    return;
+  }
   activeBatchId = "";
   batch = null;
-  hideStopButton();
-  syncBatchHud();
+  soloRunId = "";
+  hud.setStop(false);
 }
 
 /**
@@ -255,7 +290,6 @@ function syncHud(): void {
 function syncBatchHud(): void {
   if (!batch && !batchStopReason) return;
   const discovered = coverage.size();
-  const outstanding = batchDone + batchError < discovered || queue.size > 0 || queue.inFlight;
   const view: BatchView = {
     discovered,
     done: batchDone,
@@ -264,9 +298,30 @@ function syncBatchHud(): void {
     capReached,
     coverage: coverage.state(),
     eta: etaFor(batchDone, discovered, batchDurations),
+    stopped: batchStopReason ?? undefined,
   };
-  if (outstanding) hud.updateBatch(view);
-  else hud.flash(summarizeBatch(view), TTL_MS.done);
+  // A stopped batch never renders as running. The pump may still drain an in-flight
+  // page, but a spinner would promise work that will not be attempted, so the
+  // stopped summary is flashed once and then hides.
+  if (batchStopReason) {
+    hud.flash(summarizeBatch(view), TTL_MS.done);
+    return;
+  }
+  // "Running" requires real work. `discovered` exceeding what the queue holds is
+  // the normal state on a paged reader (unmounted pages were counted by coverage),
+  // so a settled-vs-discovered gap alone must not spin the pill.
+  if (queue.size > 0 || queue.inFlight) {
+    hud.updateBatch(view);
+    return;
+  }
+  // Nothing in flight but pages remain undone: the reader has not mounted them yet.
+  // Flash the waiting view rather than a terminal tally, so the user does not read
+  // a partial chapter as finished; the batch itself stays alive for the next page.
+  if (batchDone + batchError < discovered) {
+    hud.flash(summarizeBatch({ ...view, waiting: true }), TTL_MS.done);
+    return;
+  }
+  hud.flash(summarizeBatch(view), TTL_MS.done);
 }
 
 // One singleton node: the overlay layer anchors one node to one image, so the
@@ -456,7 +511,31 @@ document.addEventListener("keyup", (e) => {
 
 /* ---------------- queue + dispatch ---------------- */
 
+/**
+ * Solo run (hover/retry/context) owns the queue without batch accounting: one
+ * explicitly clicked page needs no consent dialog or page cap, so admitting it
+ * through Batch would burn the free quota for no benefit. The id exists only
+ * so the stop control can target the in-flight request.
+ */
+function ensureSolo(): void {
+  if (batch || soloRunId) return;
+  soloRunId = newBatchId();
+  hud.setStop(true, () => stopSolo());
+}
+
 function enqueue(el: Element, opts: { priority?: boolean } = {}): void {
+  // Runs before anything else so a stale batch never admits a page from the new
+  // chapter. Retired silently: the old chapter's tally would describe pages the user
+  // is no longer reading.
+  if (batch && location.href !== batchUrl) {
+    batch = null;
+    activeBatchId = "";
+    batchUrl = "";
+    queue.clear();
+    hud.setStop(false);
+    // Idle counts are what hides the pill; a stale batch tally must not linger.
+    hud.update({ total: 0, done: 0, error: 0, running: false });
+  }
   if (el.getAttribute(STATE) === "pending" || el.getAttribute(STATE) === "done") return;
   if (!isMangaCandidate(el) || !isVisibleCandidate(el)) return;
   // A page the store already holds is not work: the blob goes straight back on.
@@ -476,6 +555,9 @@ function enqueue(el: Element, opts: { priority?: boolean } = {}): void {
   // While a discovery pass is still seeding, one pump at the end covers the
   // whole batch; pumping per page would open a second loop behind the consent
   // dialog for no reason.
+  // Solo identity first: pump reads it at dispatch, and pump runs
+  // synchronously up to its first await, so creating it after would miss.
+  if (!batch) ensureSolo();
   if (!seeding) void pump();
   syncHud();
 }
@@ -563,7 +645,7 @@ async function pump(): Promise<void> {
       showRing(el);
       const startedAt = performance.now();
       try {
-        await translateOne(el, activeBatchId);
+        await translateOne(el, batch ? activeBatchId : soloRunId);
         batchDurations.push(performance.now() - startedAt);
         batchDone++;
         el.setAttribute(STATE, "done");
@@ -619,7 +701,7 @@ async function translateOne(el: Element, batchId: string): Promise<void> {
   // a response that outlived its batch must not swap an image, must not publish
   // a blob into the store, and above all must not push into `translations`,
   // where it would become the prevContext of a page the user never stopped.
-  if (batchId !== activeBatchId) throw new StaleBatch();
+  if (batchId !== activeBatchId && batchId !== soloRunId) throw new StaleBatch();
   if ("error" in resp) throw new Error(resp.error);
 
   const blob = await composePage(resp, {
@@ -729,19 +811,6 @@ mo.observe(document.documentElement, {
 });
 
 /**
- * Queue every un-translated candidate the current trigger should reach.
- * Shared by the initial pass and by rediscovery, so both agree on what counts.
- */
-function enqueueNearby(): void {
-  for (const el of scan(document, {
-    wholeDocument: enqueuesWholeDocument(readerMode),
-    padPx: VIEWPORT_PAD_PX,
-  })) {
-    enqueue(el);
-  }
-}
-
-/**
  * Alt+T and its forwarded command share this wrapper so a discovery pass that
  * found no new work says so: a keypress with zero visible effect reads as a
  * broken shortcut, not as "nothing needed translating".
@@ -797,6 +866,7 @@ async function triggerNearby(): Promise<void> {
   }
 
   batch = next;
+  batchUrl = location.href;
   activeBatchId = next.id;
   batchDurations = [];
   batchDone = 0;
@@ -804,7 +874,7 @@ async function triggerNearby(): Promise<void> {
   capReached = false;
   batchStopReason = null;
   coverage = currentCoverage();
-  showStopButton();
+  hud.setStop(true, () => void userStopBatch());
 
   const before = enqueues;
   seeding = true; // one pump at the end, not one per discovered page
@@ -845,6 +915,12 @@ function onPossibleRediscovery(): void {
     wholeDocument: enqueuesWholeDocument(readerMode),
     padPx: VIEWPORT_PAD_PX,
   })) {
+    // Accept here as well as in the observer: a page found by scrolling is
+    // translated like any other, and a page that is translated but not counted
+    // breaks the tally (the done count can outrun the discovered total) and
+    // lets a batch claim completion while it still has queued work.
+    const url = resolveImageUrl(el);
+    if (url) coverage.accept(url);
     enqueue(el);
   }
 }

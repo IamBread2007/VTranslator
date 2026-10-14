@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: pages mounting under a live batch</title>
+  </head>
+  <body>
+    <h1>Trang mount sau khi batch đã chạy</h1>
+    <!-- Two pages are mounted at load. The rest are mounted on demand, so a
+         test can add a page while a request is genuinely in flight — the
+         shape of a reader that lazily reveals the chapter as the user reads.
+
+         `unmountLast` exists because a virtualised reader also *removes* pages:
+         a page dropped before dispatch is still owed to coverage, which is
+         what keeps a batch waiting instead of claiming the chapter is done. -->
+    <div id="pages">
+      <img src="/page/1.png" width="800" height="1200" alt="trang 1" />
+      <img src="/page/2.png" width="800" height="1200" alt="trang 2" />
+    </div>
+
+    <script>
+      const pool = Array.from({ length: 6 }, (_, i) => i + 3); // pages 3..8
+      const pages = document.getElementById("pages");
+
+      window.mountNext = () => {
+        const n = pool.shift();
+        if (n === undefined) return null;
+        const img = document.createElement("img");
+        img.src = `/page/${n}.png`;
+        img.width = 800;
+        img.height = 1200;
+        img.alt = `trang ${n}`;
+        pages.appendChild(img);
+        return n;
+      };
+
+      window.unmountLast = () => {
+        const last = pages.lastElementChild;
+        if (!last) return null;
+        const alt = last.getAttribute("alt");
+        last.remove();
+        return alt;
+      };
+    </script>
+  </body>
+</html>

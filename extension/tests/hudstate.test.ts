@@ -303,6 +303,38 @@ describe("summarizeBatch", () => {
     expect(v.text).not.toMatch(/~.*(giây|phút)/);
   });
 
+  it("shows a waiting view, not running, when the queue drained with pages unmounted", () => {
+    // The frozen-pill bug: nothing in flight, but discovered pages were never
+    // laid out. "Đang dịch" would spin forever for work that does not exist.
+    const v = summarizeBatch(view({ discovered: 5, done: 2, queued: 0, waiting: true }));
+    expect(v.kind).toBe("waiting");
+    expect(v.text).toContain("đang chờ trang tiếp theo");
+    expect(v.text).toContain("2/5");
+  });
+
+  it("uses the zero-done wording when nothing has been translated yet", () => {
+    const v = summarizeBatch(view({ discovered: 3, done: 0, queued: 0, waiting: true }));
+    expect(v.kind).toBe("waiting");
+    expect(v.text).toContain("Chưa dịch trang nào");
+    expect(v.text).toContain("đang chờ trang tiếp theo");
+  });
+
+  it("checks waiting before outstanding, so queued work cannot mask it", () => {
+    const v = summarizeBatch(view({ discovered: 5, done: 2, queued: 1, waiting: true }));
+    expect(v.kind).toBe("waiting");
+  });
+
+  it("still reports running while the queue holds real work", () => {
+    const v = summarizeBatch(view({ discovered: 5, done: 2, queued: 2 }));
+    expect(v.kind).toBe("running");
+  });
+
+  it("reports terminal done, never waiting, once everything is settled", () => {
+    const v = summarizeBatch(view({ discovered: 5, done: 5, queued: 0, coverage: "complete" }));
+    expect(v.kind).toBe("done");
+    expect(v.kind).not.toBe("waiting");
+  });
+
   it("reports errors for retry once nothing is outstanding", () => {
     const v = summarizeBatch(view({ discovered: 12, done: 10, error: 2, coverage: "complete" }));
     expect(v.kind).toBe("error");
@@ -327,6 +359,40 @@ it("announces the cap without inventing a count of omitted pages", () => {
 
   it("stays idle when a batch never started", () => {
     expect(summarizeBatch(view()).kind).toBe("idle");
+  });
+
+  it("shows a terminal stopped summary after a user stop, never running", () => {
+    const v = summarizeBatch(view({ discovered: 5, done: 1, queued: 4, stopped: "user", coverage: "complete" }));
+    expect(v.kind).toBe("stop");
+    expect(v.tone).toBe("neutral");
+    expect(v.text.startsWith("Đã dừng")).toBe(true);
+    expect(v.text).toContain("1/5");
+  });
+
+  it("reports that no page was translated when a user stop lands before any finished", () => {
+    const v = summarizeBatch(view({ discovered: 5, done: 0, queued: 4, stopped: "user" }));
+    expect(v.kind).toBe("stop");
+    expect(v.text).toBe("Đã dừng — chưa dịch trang nào");
+  });
+
+  it("treats a declined consent as a terminal stop too", () => {
+    const v = summarizeBatch(view({ discovered: 33, done: 0, stopped: "declined" }));
+    expect(v.kind).toBe("stop");
+    expect(v.text).toMatch(/^Đã dừng/);
+  });
+
+  it("keeps the cap message when the batch was stopped by the cap", () => {
+    const v = summarizeBatch(view({ discovered: 65, done: 60, queued: 5, stopped: "capped", coverage: "complete" }));
+    expect(v).toEqual({
+      kind: "stop",
+      tone: "warn",
+      text: "Đã đạt giới hạn số trang cho phép. Tăng giới hạn trong tuỳ chọn nếu muốn dịch tiếp.",
+    });
+  });
+
+  it("regression: a live batch with pages left is still running, not stopped", () => {
+    const v = summarizeBatch(view({ discovered: 5, done: 1, queued: 0 }));
+    expect(v.kind).toBe("running");
   });
 });
 

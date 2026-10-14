@@ -10,7 +10,15 @@ export interface Counts {
   running: boolean;
 }
 
-export type HudKind = "idle" | "running" | "done" | "error" | "empty" | "consent" | "stop";
+export type HudKind =
+  | "idle"
+  | "running"
+  | "waiting"
+  | "done"
+  | "error"
+  | "empty"
+  | "consent"
+  | "stop";
 
 /**
  * Count the images this extension has touched under `root`.
@@ -122,6 +130,21 @@ export interface BatchView {
   capReached: boolean;
   coverage: "complete" | "progressive";
   eta?: string;
+  /**
+   * The batch was ended by the user ("user"), declined at the consent dialog
+   * ("declined"), or stopped by the cap ("capped"). A stopped batch is terminal
+   * even while its in-flight page drains: the queue may still hold work, but
+   * none of it will be attempted, so "running" would be a lie.
+   */
+  stopped?: "user" | "declined" | "capped";
+  /**
+   * The queue drained but the reader has not laid out the remaining pages yet.
+   * Not running: nothing is in flight, and the next page may mount later on a
+   * virtualized reader. Kept distinct from "running" so the pill does not spin
+   * for work that does not exist, and from a terminal tally so the batch's
+   * consent and stop control stay alive until the rest arrives.
+   */
+  waiting?: boolean;
 }
 
 /**
@@ -153,7 +176,7 @@ export function summarizeBatch(v: BatchView): HudView {
   // The cap outranks completion: hitting it means work was deliberately left
   // undone, and a "done" line would claim otherwise. The message states that the
   // limit was reached without guessing how many pages that left behind.
-  if (v.capReached) {
+  if (v.capReached || v.stopped === "capped") {
     return {
       kind: "stop",
       tone: "warn",
@@ -161,11 +184,34 @@ export function summarizeBatch(v: BatchView): HudView {
     };
   }
 
+  // A user stop or declined consent is terminal whatever the queue holds. The
+  // count is what finished, not the discovered total, so the pill does not imply
+  // the abandoned pages were attempted.
+  if (v.stopped) {
+    const text =
+      v.done === 0
+        ? "Đã dừng — chưa dịch trang nào"
+        : `Đã dừng — đã dịch ${v.done}/${v.discovered} trang`;
+    return { kind: "stop", tone: "neutral", text };
+  }
+
   const eta = v.eta ? ` — ${v.eta}` : "";
   // "đã thấy" is deliberate: until coverage is complete the denominator is what
   // discovery has seen, and presenting it as the chapter total would be a lie
   // the user acts on.
   const scope = v.coverage === "complete" ? "trang" : "trang đã thấy";
+  // Checked before `outstanding`: a waiting batch still has undone pages in
+  // `discovered`, which would otherwise read as running with nothing moving.
+  if (v.waiting) {
+    return {
+      kind: "waiting",
+      tone: "neutral",
+      text:
+        v.done === 0
+          ? "Chưa dịch trang nào — đang chờ trang tiếp theo…"
+          : `Đã dịch ${v.done}/${v.discovered} ${scope} — đang chờ trang tiếp theo…`,
+    };
+  }
   const outstanding = v.done + v.error < v.discovered || v.queued > 0;
 
   if (outstanding) {

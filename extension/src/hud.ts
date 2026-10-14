@@ -5,6 +5,13 @@
 import { summarize, summarizeBatch, type BatchView, type Counts, type HudView } from "./hudstate";
 
 export interface Hud {
+  /**
+   * Show or hide a Stop control inside the status pill. A control inside the
+   * pill rather than a separate fixed button, because a separate button shares
+   * the pill's corner and the two overlap. Firing `onStop` twice must be safe:
+   * a keypress and a click can land together.
+   */
+  setStop(active: boolean, onStop?: () => void): void;
   /** Idle counts hide the pill; anything else replaces its content. */
   update(c: Counts): void;
   /** Persistent batch projection; hides itself when there is nothing to say. */
@@ -46,6 +53,7 @@ export const HUD_CSS = `
 .mt-dialog__actions{display:flex;gap:0.5rem;justify-content:flex-end}
 .mt-dialog button{font:inherit;padding:0.45rem 0.9rem;border-radius:8px;border:1px solid #c7cdd8;background:#f3f5f9;color:#1b2a4a;cursor:pointer}
 .mt-dialog button[data-mt-accept]{background:#1b2a4a;color:#fff;border-color:#1b2a4a}
+.mt-hud__stop{font:inherit;padding:0.2rem 0.6rem;border-radius:999px;border:0;background:#b3261e;color:#fff;cursor:pointer}
 `;
 
 // Content scripts share the page's CSP. Constructable stylesheets are the
@@ -98,6 +106,9 @@ export function createHud(): Hud {
   pill.style.bottom = "16px";
   pill.style.zIndex = Z_TOP;
   pill.style.display = "none";
+  // Pointer drag must win over touch scrolling on the pill itself.
+  pill.style.touchAction = "none";
+  pill.style.cursor = "grab";
   doc.body.appendChild(pill);
 
   const label = doc.createElement("span");
@@ -109,6 +120,13 @@ export function createHud(): Hud {
   let kind: HudView["kind"] = "idle";
   let hideTimer: number | undefined;
   let retry: (() => void) | undefined;
+  let stopBtn: HTMLButtonElement | null = null;
+  let stopCb: (() => void) | undefined;
+  // Pointer position where the current press started; a press that barely
+  // moves is a click (retry/stop), not a drag, so both gestures share the pill.
+  let press: { x: number; y: number; left: number; top: number } | null = null;
+  let dragged = false;
+  const DRAG_PX = 4;
 
   function show(view: HudView): void {
     cancelHide();
@@ -118,6 +136,7 @@ export function createHud(): Hud {
     pill.setAttribute("data-tone", view.tone);
     pill.setAttribute("data-kind", view.kind);
     pill.replaceChildren(...(wantsSpinner(view.kind) ? [spinner, label] : [label]));
+    syncStopKids();
     pill.style.display = "flex";
   }
 
@@ -134,9 +153,49 @@ export function createHud(): Hud {
     }
   }
 
+  function syncStopKids(): void {
+    // show() rebuilds the pill's children, which detaches the control.
+    if (stopBtn && !pill.contains(stopBtn)) pill.appendChild(stopBtn);
+  }
+
+  // The whole pill is the drag handle: no separate grip, so there is nothing
+  // extra to discover or to overlap the text. A press starting on the stop
+  // control or moving less than DRAG_PX stays a click (stop/retry keep working).
+  function onMove(e: PointerEvent): void {
+    if (!press) return;
+    const dx = e.clientX - press.x;
+    const dy = e.clientY - press.y;
+    if (!dragged && Math.hypot(dx, dy) < DRAG_PX) return;
+    dragged = true;
+    pill.style.left = `${Math.round(press.left + dx)}px`;
+    pill.style.top = `${Math.round(press.top + dy)}px`;
+    pill.style.right = "auto";
+    pill.style.bottom = "auto";
+  }
+  function endPress(): void {
+    press = null;
+  }
+  pill.addEventListener("pointerdown", (e) => {
+    // Touch presses carry no meaningful button; only gate the mouse.
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if ((e.target as Element | null)?.closest?.(".mt-hud__stop")) return;
+    const r = pill.getBoundingClientRect();
+    press = { x: e.clientX, y: e.clientY, left: r.left, top: r.top };
+    dragged = false;
+  });
+  doc.addEventListener("pointermove", onMove);
+  doc.addEventListener("pointerup", endPress);
+  doc.addEventListener("pointercancel", endPress);
+
   // A click on a settled "done" or a running batch must not look like a retry to
   // the user, so the handler is gated on the state that actually offers one.
+  // A click that ends a drag must not retry either: the press moved, so it was
+  // never a click on the error text.
   pill.addEventListener("click", () => {
+    if (dragged) {
+      dragged = false;
+      return;
+    }
     if (kind !== "error") return;
     retry?.();
   });
@@ -169,6 +228,34 @@ export function createHud(): Hud {
 
     onRetry(cb: () => void): void {
       retry = cb;
+    },
+
+    setStop(active: boolean, onStop?: () => void): void {
+      // The stop control lives inside the pill: a separate fixed button shares
+      // the pill's corner and the two overlap. Firing twice is safe because a
+      // keypress and a click can land together.
+      if (!active) {
+        stopCb = undefined;
+        stopBtn?.remove();
+        stopBtn = null;
+        syncStopKids();
+        return;
+      }
+      if (onStop) stopCb = onStop;
+      if (!stopBtn) {
+        const btn = doc.createElement("button");
+        btn.type = "button";
+        btn.className = "mt-hud__stop";
+        btn.dataset.mtHud = "";
+        btn.textContent = "D\u1eebng";
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          stopCb?.();
+        });
+        stopBtn = btn;
+      }
+      syncStopKids();
+      if (pill.style.display === "none") pill.style.display = "flex";
     },
 
     /**
@@ -229,6 +316,9 @@ export function createHud(): Hud {
 
     destroy(): void {
       cancelHide();
+      doc.removeEventListener("pointermove", onMove);
+      doc.removeEventListener("pointerup", endPress);
+      doc.removeEventListener("pointercancel", endPress);
       pill.remove();
     },
   };

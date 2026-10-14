@@ -110,6 +110,69 @@ describe("flash", () => {
   });
 });
 
+describe("stop control", () => {
+  it("shows a stop control while a run is in flight and fires on stop", () => {
+    const cb = vi.fn();
+    hud!.setStop(true, cb);
+    const stop = pill().querySelector<HTMLButtonElement>(".mt-hud__stop");
+    expect(stop, "stop control must be in the pill").not.toBeNull();
+    stop!.click();
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the stop control when the run settles", () => {
+    const cb = vi.fn();
+    hud!.setStop(true, cb);
+    hud!.setStop(false);
+    expect(pill().querySelector(".mt-hud__stop")).toBeNull();
+  });
+});
+
+describe("drag", () => {
+  function dragBy(el: HTMLElement, dx: number, dy: number): void {
+    const r = { left: 100, top: 100, right: 200, bottom: 130, width: 100, height: 30 };
+    el.getBoundingClientRect = () => r as DOMRect;
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 150, clientY: 115, button: 0 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 150 + dx, clientY: 115 + dy }));
+    document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  }
+
+  it("moves the pill by pointer drag without touching its content", () => {
+    hud!.update({ total: 5, done: 2, error: 0, running: true });
+    const el = pill();
+    const textBefore = el.querySelector(".mt-hud__label")?.textContent;
+    dragBy(el, 40, -30);
+    expect(el.style.left).toBe("140px");
+    expect(el.style.top).toBe("70px");
+    expect(el.querySelector(".mt-hud__label")?.textContent).toBe(textBefore);
+  });
+
+  it("does not start a drag from the stop control", () => {
+    const cb = vi.fn();
+    hud!.update({ total: 5, done: 2, error: 0, running: true });
+    hud!.setStop(true, cb);
+    const stop = pill().querySelector<HTMLElement>(".mt-hud__stop")!;
+    stop.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 150, clientY: 115, button: 0 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 300, clientY: 300 }));
+    document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    expect(pill().style.left).toBe("");
+  });
+
+  it("a plain click without movement is not a drag", () => {
+    const cb = vi.fn();
+    hud!.onRetry(cb);
+    hud!.update({ total: 4, done: 2, error: 2, running: false });
+    const el = pill();
+    el.getBoundingClientRect = () =>
+      ({ left: 100, top: 100, right: 200, bottom: 130, width: 100, height: 30 }) as DOMRect;
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 150, clientY: 115, button: 0 }));
+    document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(el.style.left).toBe("");
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("onRetry", () => {
   it("retries once per click while an error is showing and stays visible", () => {
     vi.useFakeTimers();
@@ -141,12 +204,16 @@ describe("onRetry", () => {
   });
 });
 
-describe("HUD_CSS", () => {
+describe("HUD_CSS_rules", () => {
   it("carries spinner, ring and reduced-motion rules for both injection paths", () => {
     expect(HUD_CSS).toContain("@keyframes mt-spin");
     expect(HUD_CSS).toContain("@keyframes mt-pulse");
     expect(HUD_CSS).toContain(".mt-ring");
     expect(HUD_CSS).toContain("prefers-reduced-motion");
+  });
+
+  it("styles the in-pill stop control", () => {
+    expect(HUD_CSS).toContain(".mt-hud__stop");
   });
 
   it("injects once per document even when several pills are created", () => {
