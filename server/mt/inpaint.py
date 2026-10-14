@@ -16,6 +16,25 @@ def _clip(box: Box, w: int, h: int) -> tuple[int, int, int, int]:
     return x0, y0, x1, y1
 
 
+def _drop_border_components(m: np.ndarray) -> np.ndarray:
+    """Remove ink components that touch the ROI edge and span most of it.
+
+    A bubble outline or panel border crosses the crop edge and reads as a huge
+    ink component. Real glyphs are small and interior, so anything touching an
+    edge while spanning over 60% of that edge is structure, not text.
+    """
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    h, w = m.shape
+    out = m.copy()
+    for lbl in range(1, n):
+        x, y, cw, ch, _ = stats[lbl]
+        touches_x = (y == 0 or y + ch == h) and cw > 0.6 * w
+        touches_y = (x == 0 or x + cw == w) and ch > 0.6 * h
+        if touches_x or touches_y:
+            out[labels == lbl] = 0
+    return out
+
+
 def text_mask(page: Image.Image, boxes: Sequence[Box]) -> np.ndarray:
     """uint8 HxW mask (0/255) of text strokes inside `boxes` (Otsu + dilate)."""
     gray = np.asarray(page.convert("L"))
@@ -30,6 +49,7 @@ def text_mask(page: Image.Image, boxes: Sequence[Box]) -> np.ndarray:
         # Text strokes are the minority; flip for light text on dark background.
         if np.count_nonzero(m) > m.size / 2:
             m = cv2.bitwise_not(m)
+        m = _drop_border_components(m)
         region = mask[y0:y1, x0:x1]
         mask[y0:y1, x0:x1] = np.bitwise_or(region, np.asarray(m, np.uint8))
     kernel = np.ones((2 * DILATE_PX + 1, 2 * DILATE_PX + 1), np.uint8)

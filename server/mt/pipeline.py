@@ -33,7 +33,7 @@ from .translator import PROMPT_VERSION
 # v3: PP-OCRv5 mobile det/rec replaced server models (CPU speed), CUDA torch.
 # v4: pt added, which routes to latin_PP-OCRv5_mobile_rec instead of the
 #     chinese-dict probe; v3 perception entries for pt pages use the wrong model.
-PIPELINE_VERSION = "5"
+PIPELINE_VERSION = "6"
 BUBBLE_SHRINK = 0.12
 TEXT_KINDS = ("text_bubble", "text_free")
 
