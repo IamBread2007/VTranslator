@@ -142,21 +142,124 @@ def contains(outer: Box, inner: Box, min_frac: float = 0.8) -> bool:
     return area > 0 and inter / area >= min_frac
 
 
-def sort_reading_order(boxes: list[Box], rtl: bool = False) -> list[int]:
-    """Group into rows (y tolerance = 0.5 x median height); sort x within row."""
+def _union_of(boxes: list[Box], idxs: list[int]) -> Box:
+    x0 = min(boxes[i].x for i in idxs)
+    y0 = min(boxes[i].y for i in idxs)
+    x1 = max(boxes[i].x + boxes[i].w for i in idxs)
+    y1 = max(boxes[i].y + boxes[i].h for i in idxs)
+    return Box(x=x0, y=y0, w=x1 - x0, h=y1 - y0)
+
+
+def _widest_gap(spans: list[tuple[float, float]]) -> tuple[float, float]:
+    """Widest empty stretch between projected spans, as (size, cut position).
+
+    Size is 0 when the spans cover the axis, so callers never handle an Optional.
+    """
+    ordered = sorted(spans)
+    best = (0.0, 0.0)
+    reach = ordered[0][1]
+    for start, end in ordered[1:]:
+        if start > reach:
+            gap = start - reach
+            if gap > best[0]:
+                best = (gap, (reach + start) / 2)
+        reach = max(reach, end)
+    return best
+
+
+def _units(
+    boxes: list[Box], idxs: list[int], bubbles: tuple[Box, ...]
+) -> list[list[int]]:
+    """Reading units: each text box alone, except all text in one bubble is one unit.
+
+    Keeping bubble text together stops a sentence split by a neighbouring bubble
+    from being read as two unrelated lines.
+    """
+    owned: dict[int, list[int]] = {}
+    units: list[list[int]] = []
+    for i in idxs:
+        owner = next(
+            (k for k, bb in enumerate(bubbles) if contains(bb, boxes[i])), None
+        )
+        if owner is None:
+            units.append([i])
+        else:
+            owned.setdefault(owner, []).append(i)
+    units.extend(owned.values())
+    return units
+
+
+def _leaf_order(
+    boxes: list[Box], idxs: list[int], rtl: bool, tol: float, bubbles: tuple[Box, ...]
+) -> list[int]:
+    """Read a cell that has no panel gutter: rows top to bottom, units left to right."""
+    placed = sorted(
+        ((_union_of(boxes, u), u) for u in _units(boxes, idxs, bubbles)),
+        key=lambda t: (t[0].y, t[0].x),
+    )
+    rows: list[list[tuple[Box, list[int]]]] = []
+    for item in placed:
+        if rows and item[0].y - rows[-1][0][0].y <= tol:
+            rows[-1].append(item)
+        else:
+            rows.append([item])
+    out: list[int] = []
+    for row in rows:
+        row.sort(key=lambda t: t[0].x, reverse=rtl)
+        for _, unit in row:
+            out.extend(sorted(unit, key=lambda i: (boxes[i].y, boxes[i].x)))
+    return out
+
+
+def _xy_cut(
+    boxes: list[Box],
+    idxs: list[int],
+    rtl: bool,
+    min_x_gap: float,
+    min_y_gap: float,
+    bubbles: tuple[Box, ...],
+) -> list[int]:
+    if len(idxs) <= 1:
+        return list(idxs)
+    # The widest gap on each axis is a candidate cut. A vertical gutter separates
+    # panel columns; a horizontal band separates tiers. The wider gap wins, so a
+    # tall gutter is not overridden by a thin line gap.
+    x_size, x_cut = _widest_gap([(boxes[i].x, boxes[i].x + boxes[i].w) for i in idxs])
+    y_size, y_cut = _widest_gap([(boxes[i].y, boxes[i].y + boxes[i].h) for i in idxs])
+    cut_x = x_size > 0 and x_size >= min_x_gap
+    cut_y = y_size > 0 and y_size >= min_y_gap
+    if cut_x and (not cut_y or x_size >= y_size):
+        low = [i for i in idxs if boxes[i].x + boxes[i].w / 2 < x_cut]
+        high = [i for i in idxs if boxes[i].x + boxes[i].w / 2 >= x_cut]
+        first, second = (high, low) if rtl else (low, high)
+        return _xy_cut(boxes, first, rtl, min_x_gap, min_y_gap, bubbles) + _xy_cut(
+            boxes, second, rtl, min_x_gap, min_y_gap, bubbles
+        )
+    if cut_y:
+        top = [i for i in idxs if boxes[i].y + boxes[i].h / 2 < y_cut]
+        bottom = [i for i in idxs if boxes[i].y + boxes[i].h / 2 >= y_cut]
+        return _xy_cut(boxes, top, rtl, min_x_gap, min_y_gap, bubbles) + _xy_cut(
+            boxes, bottom, rtl, min_x_gap, min_y_gap, bubbles
+        )
+    # No qualifying gap: the cell is one tier. The half-median band threshold also
+    # serves as the row tolerance, so line spacing and tier spacing agree.
+    return _leaf_order(boxes, idxs, rtl, min_y_gap, bubbles)
+
+
+def sort_reading_order(
+    boxes: list[Box], rtl: bool = False, bubbles: tuple[Box, ...] = ()
+) -> list[int]:
+    """Panel-aware reading order via recursive XY-Cut.
+
+    A gutter must reach 4% of the page width and a band half the median box
+    height to split the page, so ordinary line spacing does not cut a panel. `rtl`
+    reads the right column first. `bubbles` is optional: without it every text box
+    is its own unit, and the result is pure geometry.
+    """
     if not boxes:
         return []
     heights = sorted(b.h for b in boxes)
     med = heights[len(heights) // 2]
-    tol = 0.5 * med if med > 0 else 0
-    rows: list[list[int]] = []
-    for i in sorted(range(len(boxes)), key=lambda i: (boxes[i].y, boxes[i].x)):
-        if rows and boxes[i].y - boxes[rows[-1][0]].y <= tol:
-            rows[-1].append(i)
-        else:
-            rows.append([i])
-    out: list[int] = []
-    for row in rows:
-        row.sort(key=lambda i: boxes[i].x, reverse=rtl)
-        out.extend(row)
-    return out
+    tol = 0.5 * med if med > 0 else 0.0
+    page_w = max(b.x + b.w for b in boxes) - min(b.x for b in boxes)
+    return _xy_cut(boxes, list(range(len(boxes))), rtl, 0.04 * page_w, tol, bubbles)
