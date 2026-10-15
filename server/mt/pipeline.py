@@ -42,7 +42,9 @@ from .translator import GLOSSARY_CAP, PROMPT_VERSION, TranslationResult
 # v4: pt added, which routes to latin_PP-OCRv5_mobile_rec instead of the
 #     chinese-dict probe; v3 perception entries for pt pages use the wrong model.
 # v8: blocks carry measured slice widths, so v7 perception entries are stale.
-PIPELINE_VERSION = "8"
+# v9: mask polarity is a border vote and light-on-light bubble text is forced
+#     black, so v8 entries hold inverted dense-text masks and white glyph styles.
+PIPELINE_VERSION = "9"
 BUBBLE_SHRINK = 0.12
 TEXT_KINDS = ("text_bubble", "text_free")
 

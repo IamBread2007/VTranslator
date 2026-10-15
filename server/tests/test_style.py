@@ -81,3 +81,17 @@ def test_dense_bubble_text_stays_black():
     mask = text_mask(img, [box])
     s = estimate_style(img, box, "text_bubble", 1, mask_roi=mask)
     assert s.color == "#000000"
+
+
+def test_light_on_light_bubble_forces_black():
+    # A sample lighter than its own white ground cannot be read, so it is error
+    # rather than intent: the guard overrides it to keep the text visible.
+    import numpy as np
+
+    img = Image.new("RGB", (200, 120), (255, 255, 255))
+    ImageDraw.Draw(img).rectangle((60, 40, 140, 80), fill=(220, 220, 220))
+    box = Box(x=0, y=0, w=200, h=120)
+    mask = np.zeros((120, 200), np.uint8)
+    mask[40:81, 60:141] = 255
+    s = estimate_style(img, box, "text_bubble", 1, mask_roi=mask)
+    assert s.color == "#000000"
