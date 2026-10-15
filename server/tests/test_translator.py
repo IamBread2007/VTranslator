@@ -266,3 +266,47 @@ def test_parse_glossary_missing_returns_empty():
 
     assert parse_glossary('{"translations":[{"id":1,"text":"x"}]}') == []
     assert parse_glossary("garbage") == []
+
+
+def test_vision_request_uses_som_image_for_normal_page():
+    # Normal pages send one image; it must carry the outline + [n] markers.
+    page = Image.new("RGB", (400, 400), "white")
+    vis = build_vision_images(page, [(1, Box(x=50, y=50, w=100, h=100))])
+    assert len(vis) == 1
+    assert vis[0].getpixel((50, 100))[0] > 150  # red outline present
+
+
+def test_vision_webtoon_still_overview_plus_tiles_with_som_markers():
+    img = Image.new("RGB", (800, 10000), "white")
+    blocks = [(1, Box(x=10, y=100, w=50, h=80)), (2, Box(x=20, y=9000, w=50, h=80))]
+    vis = build_vision_images(img, blocks)
+    assert len(vis) > 2
+    assert all(max(v.size) <= 1600 for v in vis)
+    assert vis[0].getpixel((10, 140))[0] > 150  # overview carries the outline
+
+
+def test_translate_result_carries_glossary_separately_from_translations():
+    from mt.translator import TranslationResult
+
+    content = (
+        '{"translations":[{"id":1,"text":"Xin chào"}],'
+        '"glossary":[{"term":"A","translation":"B","note":"anh-em"}]}'
+    )
+
+    def h(req):
+        return httpx.Response(200, json=_ok(content))
+
+    res = _translator(h).translate_full(
+        Image.new("RGB", (50, 50)), _items("こんにちは"), "ja", "vi", []
+    )
+    assert isinstance(res, TranslationResult)
+    assert res.translations == {1: "Xin chào"}
+    assert res.glossary == [{"term": "A", "translation": "B", "note": "anh-em"}]
+
+
+def test_prompt_includes_glossary_context_from_previous_pages():
+    imgs = [Image.new("RGB", (100, 100))]
+    gloss = [{"term": "Yuki", "translation": "Yuki", "note": "em gái, gọi là em"}]
+    msgs = build_messages(imgs, [(1, "x")], "ja", "vi", ["câu trước"], glossary=gloss)
+    text = next(p["text"] for p in msgs[-1]["content"] if p["type"] == "text")
+    assert "Yuki" in text and "em gái" in text

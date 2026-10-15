@@ -9,7 +9,7 @@ import io
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,8 +28,15 @@ from .ocr import (
     resolve_source_lang,
     select_probe_crops,
 )
-from .schemas import Block, Box, Style, TranslateOptions, TranslateResponse
-from .translator import PROMPT_VERSION
+from .schemas import (
+    Block,
+    Box,
+    GlossaryEntry,
+    Style,
+    TranslateOptions,
+    TranslateResponse,
+)
+from .translator import GLOSSARY_CAP, PROMPT_VERSION, TranslationResult
 
 # v3: PP-OCRv5 mobile det/rec replaced server models (CPU speed), CUDA torch.
 # v4: pt added, which routes to latin_PP-OCRv5_mobile_rec instead of the
@@ -83,6 +90,11 @@ def _png_bytes(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
+
+
+def _as_entry(entry: GlossaryEntry | dict[str, str]) -> GlossaryEntry:
+    """LLM replies carry glossary entries as dicts; the response holds models."""
+    return entry if isinstance(entry, GlossaryEntry) else GlossaryEntry(**entry)
 
 
 class Pipeline:
@@ -213,16 +225,52 @@ class Pipeline:
         tgt: str,
         ctx: list[str],
         warnings: list[str],
-    ) -> dict[int, str]:
+        glossary: Sequence[GlossaryEntry | dict[str, str]] = (),
+    ) -> TranslationResult:
         # A translator that implements the async path can be cancelled mid-request,
         # which is what stops the provider generating and billing further tokens.
         # One that does not is pushed to a thread so the event loop keeps running.
+        full_async = getattr(self.translator, "translate_async_full", None)
+        if full_async is not None:
+            result = await full_async(
+                page, items, lang, tgt, ctx, warnings=warnings, glossary=glossary
+            )
+            return TranslationResult(
+                translations=result.translations,
+                glossary=[_as_entry(g) for g in result.glossary],
+            )
+        full_sync = getattr(self.translator, "translate_full", None)
+        if full_sync is not None:
+            result = await asyncio.to_thread(
+                full_sync,
+                page,
+                items,
+                lang,
+                tgt,
+                ctx,
+                warnings=warnings,
+                glossary=glossary,
+            )
+            return TranslationResult(
+                translations=result.translations,
+                glossary=[_as_entry(g) for g in result.glossary],
+            )
+        # Translators written before the glossary exist only return the
+        # translations half, so there is nothing to feed to the next page.
         async_call = getattr(self.translator, "translate_async", None)
         if async_call is not None:
-            return await async_call(page, items, lang, tgt, ctx, warnings=warnings)
-        return await asyncio.to_thread(
-            self.translator.translate, page, items, lang, tgt, ctx, warnings
+            tr = await async_call(page, items, lang, tgt, ctx, warnings=warnings)
+            return TranslationResult(translations=tr, glossary=[])
+        tr = await asyncio.to_thread(
+            self.translator.translate,
+            page,
+            items,
+            lang,
+            tgt,
+            ctx,
+            warnings=warnings,
         )
+        return TranslationResult(translations=tr, glossary=[])
 
     def run(self, image_bytes: bytes, opts: TranslateOptions) -> TranslateResponse:
         # Single implementation, two entry points: the CLI and the existing tests
@@ -261,10 +309,13 @@ class Pipeline:
         warnings: list[str] = list(meta.get("warnings", []))
         raw_blocks: list[dict] = meta["blocks"]
         translations: dict[int, str] = {}
+        glossary: list[GlossaryEntry] = []
         t_hit = None
 
         if raw_blocks:
             ctx = normalize_context(opts.prev_context)
+            # A previous page can hand over more terms than the prompt should carry.
+            glossary_in = list(opts.glossary[-GLOSSARY_CAP:])
             t_key = make_key(
                 "translation",
                 p_key,
@@ -273,23 +324,38 @@ class Pipeline:
                 self.llm_model,
                 PROMPT_VERSION,
                 ctx,
+                # The glossary changes the translation, so it belongs in the key.
+                [g.model_dump() for g in glossary_in],
             )
             stored = self.cache.get_translation(t_key)
             t_hit = stored is not None
             if stored is not None:
-                translations = {int(k): v for k, v in stored.items()}
+                translations = {int(k): v for k, v in stored["translations"].items()}
+                glossary = [GlossaryEntry(**g) for g in stored["glossary"]]
             else:
                 # Everything above was free. This is the point where the run
                 # starts costing money, so it is the last checkpoint before it.
                 await asyncio.sleep(0)
                 items = [(b["id"], Box(**b["box"]), b["source"]) for b in raw_blocks]
-                translations = await self._translate_async(
-                    page, items, lang, opts.target_lang, ctx, warnings
+                result = await self._translate_async(
+                    page,
+                    items,
+                    lang,
+                    opts.target_lang,
+                    ctx,
+                    warnings,
+                    glossary_in,
                 )
+                translations = result.translations
+                glossary = result.glossary
                 # Written only after a completed translation, so a cancelled run
                 # leaves nothing that a later read could mistake for a hit.
                 self.cache.put_translation(
-                    t_key, {str(k): v for k, v in translations.items()}
+                    t_key,
+                    {
+                        "translations": {str(k): v for k, v in translations.items()},
+                        "glossary": [g.model_dump() for g in glossary],
+                    },
                 )
 
         blocks: list[Block] = []
@@ -314,4 +380,5 @@ class Pipeline:
             resolved_source_lang=lang,  # type: ignore[arg-type]
             blocks=blocks,
             warnings=warnings,
+            glossary=glossary,
         )

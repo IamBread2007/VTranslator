@@ -4,6 +4,7 @@ import json
 import math
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont
@@ -70,6 +71,14 @@ def annotate_region(
     draw = ImageDraw.Draw(out)
     font_px = max(14, out.width // 40)
     font = ImageFont.load_default(size=font_px)
+    # Outlines are drawn in a separate pass so no region edge covers an id label.
+    stroke = max(2, out.width // 400)
+    for _, box in blocks:
+        draw.rectangle(
+            (box.x, box.y - y0, box.x + box.w, box.y + box.h - y0),
+            outline=(230, 30, 30),
+            width=stroke,
+        )
     for bid, box in blocks:
         label = str(bid)
         left, t, r, b = draw.textbbox((0, 0), label, font=font)
@@ -93,15 +102,7 @@ def build_som_image(
     so it can tell speakers apart without reading the OCR text first. The longest
     edge is capped at MAX_EDGE so the page stays within the vision payload limit.
     """
-    out = page.convert("RGB").copy()
-    draw = ImageDraw.Draw(out)
-    for _, box in blocks:
-        draw.rectangle(
-            (box.x, box.y, box.x + box.w, box.y + box.h),
-            outline=(230, 30, 30),
-            width=max(2, out.width // 400),
-        )
-    return resize_max_edge(annotate_region(out, blocks))
+    return resize_max_edge(annotate_region(page, blocks))
 
 
 def _vertical_tiles(width: int, height: int) -> tuple[list[tuple[int, int]], bool]:
@@ -146,12 +147,31 @@ def to_data_url(img: Image.Image) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def _glossary_dict(entry: object) -> dict[str, str]:
+    """Glossary entry as a plain dict; the pipeline may hand over schema models.
+
+    Duck-typed so this module keeps working with plain dicts (and with callers
+    that pass the Pydantic model) without importing the schemas module.
+    """
+    if isinstance(entry, dict):
+        return entry
+    dump = getattr(entry, "model_dump", None)
+    if callable(dump):
+        return dump()
+    return {
+        "term": getattr(entry, "term", ""),
+        "translation": getattr(entry, "translation", ""),
+        "note": getattr(entry, "note", ""),
+    }
+
+
 def build_messages(
     images: Sequence[Image.Image],
     items: Sequence[tuple[int, str]],
     src: str,
     tgt: str,
     prev_context: Sequence[str],
+    glossary: Sequence[dict[str, str]] = (),
 ) -> list[dict]:
     src_name = LANG_NAMES.get(src, src)
     tgt_name = LANG_NAMES.get(tgt, tgt)
@@ -165,6 +185,13 @@ def build_messages(
     if prev_context:
         lines.append("Previous context (earlier lines of this chapter):")
         lines.extend(f"- {c}" for c in list(prev_context)[-20:])
+    if glossary:
+        lines.append("Glossary from earlier pages (use these terms and pronouns):")
+        lines.extend(
+            f"- {g['term']} = {g['translation']}"
+            + (f" ({g['note']})" if g.get("note") else "")
+            for g in list(glossary)[-GLOSSARY_CAP:]
+        )
     lines.append("OCR text per region (id: text):")
     lines.extend(f"{i}: {t}" for i, t in items)
     content: list[dict] = [{"type": "text", "text": "\n".join(lines)}]
@@ -219,6 +246,20 @@ def parse_translations(raw: str, valid_ids: set[int]) -> dict[int, str]:
 
 
 GLOSSARY_CAP = 30
+
+
+@dataclass(frozen=True)
+class TranslationResult:
+    translations: dict[int, str]
+    glossary: list[dict[str, str]]
+
+
+def _result(raw: str, valid: set[int]) -> TranslationResult:
+    """One reply yields both halves; a reply with no glossary still yields its translations."""
+    return TranslationResult(
+        translations=parse_translations(raw, valid),
+        glossary=parse_glossary(raw),
+    )
 
 
 def parse_glossary(raw: str) -> list[dict[str, str]]:
@@ -316,15 +357,15 @@ class LlmTranslator:
 
     def _finish(
         self, raw: str, messages: list[dict], valid: set[int]
-    ) -> dict[int, str]:
+    ) -> TranslationResult:
         if _extract_obj(raw) is not None:
-            return parse_translations(raw, valid)
+            return _result(raw, valid)
         retry = [
             *messages,
             {"role": "assistant", "content": raw},
             {"role": "user", "content": RETRY_INSTRUCTION},
         ]
-        return parse_translations(self._complete(retry), valid)
+        return _result(self._complete(retry), valid)
 
     def translate(
         self,
@@ -334,12 +375,28 @@ class LlmTranslator:
         tgt: str,
         prev_context: Sequence[str],
         warnings: list[str] | None = None,
+        glossary: Sequence[dict[str, str]] = (),
     ) -> dict[int, str]:
+        return self.translate_full(
+            page, items, src, tgt, prev_context, warnings, glossary
+        ).translations
+
+    def translate_full(
+        self,
+        page: Image.Image,
+        items: Sequence[tuple[int, Box, str]],
+        src: str,
+        tgt: str,
+        prev_context: Sequence[str],
+        warnings: list[str] | None = None,
+        glossary: Sequence[dict[str, str]] = (),
+    ) -> TranslationResult:
+        glossary = [_glossary_dict(g) for g in glossary]
         if not items:
-            return {}
+            return TranslationResult(translations={}, glossary=[])
         images = build_vision_images(page, [(i, b) for i, b, _ in items], warnings)
         messages = build_messages(
-            images, [(i, t) for i, _, t in items], src, tgt, prev_context
+            images, [(i, t) for i, _, t in items], src, tgt, prev_context, glossary
         )
         valid = {i for i, _, _ in items}
         return self._finish(self._complete(messages), messages, valid)
@@ -352,25 +409,42 @@ class LlmTranslator:
         tgt: str,
         prev_context: Sequence[str],
         warnings: list[str] | None = None,
+        glossary: Sequence[dict[str, str]] = (),
     ) -> dict[int, str]:
         """Cancellable counterpart of `translate`.
 
         Awaiting an AsyncClient request means cancelling the task aborts the
         socket, which is what stops the provider continuing to bill for tokens.
         """
+        result = await self.translate_async_full(
+            page, items, src, tgt, prev_context, warnings, glossary
+        )
+        return result.translations
+
+    async def translate_async_full(
+        self,
+        page: Image.Image,
+        items: Sequence[tuple[int, Box, str]],
+        src: str,
+        tgt: str,
+        prev_context: Sequence[str],
+        warnings: list[str] | None = None,
+        glossary: Sequence[dict[str, str]] = (),
+    ) -> TranslationResult:
+        glossary = [_glossary_dict(g) for g in glossary]
         if not items:
-            return {}
+            return TranslationResult(translations={}, glossary=[])
         images = build_vision_images(page, [(i, b) for i, b, _ in items], warnings)
         messages = build_messages(
-            images, [(i, t) for i, _, t in items], src, tgt, prev_context
+            images, [(i, t) for i, _, t in items], src, tgt, prev_context, glossary
         )
         valid = {i for i, _, _ in items}
         raw = await self._complete_async(messages)
         if _extract_obj(raw) is not None:
-            return parse_translations(raw, valid)
+            return _result(raw, valid)
         retry = [
             *messages,
             {"role": "assistant", "content": raw},
             {"role": "user", "content": RETRY_INSTRUCTION},
         ]
-        return parse_translations(await self._complete_async(retry), valid)
+        return _result(await self._complete_async(retry), valid)

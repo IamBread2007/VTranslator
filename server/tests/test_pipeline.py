@@ -276,3 +276,68 @@ def test_no_translation_cache_entry_after_cancel(tmp_path):
     asyncio.run(main())
     files = list((tmp_path / "translation").glob("*.json"))
     assert files == []
+
+
+class FakeGlossaryTr:
+    """Returns a glossary alongside translations and records the glossary it was given."""
+
+    def __init__(self):
+        self.received_glossary = None
+
+    def translate_full(
+        self, page, items, src, tgt, prev_context, warnings=None, glossary=()
+    ):
+        from mt.translator import TranslationResult
+
+        self.received_glossary = list(glossary)
+        gloss = [{"term": "Yuki", "translation": "Yuki", "note": "anh"}]
+        return TranslationResult(translations={items[0][0]: "Chữ"}, glossary=gloss)
+
+    def translate(
+        self, page, items, src, tgt, prev_context, warnings=None, glossary=()
+    ):
+        return self.translate_full(
+            page, items, src, tgt, prev_context, warnings, glossary
+        ).translations
+
+
+def test_glossary_is_returned_in_the_response(tmp_path):
+    p = make_pipeline(tmp_path, translator=FakeGlossaryTr())
+    resp = p.run(_png(), TranslateOptions(source_lang="ja"))
+    assert [g.model_dump() for g in resp.glossary] == [
+        {"term": "Yuki", "translation": "Yuki", "note": "anh"}
+    ]
+
+
+def test_glossary_from_previous_page_is_fed_into_next_translation(tmp_path):
+    tr = FakeGlossaryTr()
+    p = make_pipeline(tmp_path, translator=tr)
+    first = p.run(_png(), TranslateOptions(source_lang="ja"))
+    p.run(
+        _png(),
+        TranslateOptions(source_lang="ja", prev_context=["x"], glossary=first.glossary),
+    )
+    assert tr.received_glossary == first.glossary
+
+
+def test_glossary_is_capped_at_thirty_before_feeding_forward(tmp_path):
+    from mt.schemas import GlossaryEntry
+
+    big = [GlossaryEntry(term=f"t{i}", translation="v", note="") for i in range(40)]
+    opts = TranslateOptions(source_lang="ja", glossary=big)
+    assert len(opts.glossary) == 30
+
+
+def test_glossary_change_invalidates_translation_cache(tmp_path):
+    tr = FakeGlossaryTr()
+    p = make_pipeline(tmp_path, translator=tr)
+    p.run(_png(), TranslateOptions(source_lang="ja"))
+    p.run(
+        _png(),
+        TranslateOptions(
+            source_lang="ja",
+            glossary=[{"term": "A", "translation": "B", "note": ""}],
+        ),
+    )
+    files = list((tmp_path / "translation").glob("*.json"))
+    assert len(files) == 2, files
