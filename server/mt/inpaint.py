@@ -35,6 +35,27 @@ def _drop_border_components(m: np.ndarray) -> np.ndarray:
     return out
 
 
+def _fix_polarity(m: np.ndarray) -> np.ndarray:
+    """Orient a THRESH_BINARY_INV ROI mask so its white marks text, not ground.
+
+    `m` marks the ROI's dark side. The ROI border is background, so the class
+    covering it is the background's: a mostly bright border means dark glyphs on
+    light ground and Otsu already has the mask the right way round, while a
+    mostly dark border means the glyphs are the light side and it is back to
+    front. Ink can cover most of a dense box, so only the border decides; a
+    fifty-fifty border, or none at all, carries no evidence and falls back to
+    the old rule that ink is the minority.
+    """
+    border = np.zeros_like(m, dtype=bool)
+    border[[0, -1], :] = True
+    border[:, [0, -1]] = True
+    total = int(np.count_nonzero(border))
+    bright = total - int(np.count_nonzero(m[border]))
+    if not total or 2 * bright == total:
+        return cv2.bitwise_not(m) if np.count_nonzero(m) > m.size / 2 else m
+    return cv2.bitwise_not(m) if 2 * bright < total else m
+
+
 def text_mask(page: Image.Image, boxes: Sequence[Box]) -> np.ndarray:
     """uint8 HxW mask (0/255) of text strokes inside `boxes` (Otsu + dilate)."""
     gray = np.asarray(page.convert("L"))
@@ -46,9 +67,7 @@ def text_mask(page: Image.Image, boxes: Sequence[Box]) -> np.ndarray:
             continue
         roi = gray[y0:y1, x0:x1]
         _, m = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        # Text strokes are the minority; flip for light text on dark background.
-        if np.count_nonzero(m) > m.size / 2:
-            m = cv2.bitwise_not(m)
+        m = _fix_polarity(m)
         m = _drop_border_components(m)
         region = mask[y0:y1, x0:x1]
         mask[y0:y1, x0:x1] = np.bitwise_or(region, np.asarray(m, np.uint8))

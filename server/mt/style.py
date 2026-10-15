@@ -91,6 +91,11 @@ def estimate_style(
     fg, bg = colors if colors is not None else _two_colors(crop)
     fg, bg = _snap(fg), _snap(bg)
 
+    # Light glyphs on a light bubble are unreadable, so such a sample is error,
+    # not intent; white-on-dark SFX is a different branch and stays untouched.
+    if kind == "text_bubble" and _luma(bg) >= 0.5 and _luma(fg) >= 0.75:
+        fg = np.zeros(3)
+
     dark_bg = _luma(bg) < DARK_LUMA
     if kind == "text_free" or dark_bg:
         stroke_width = 3

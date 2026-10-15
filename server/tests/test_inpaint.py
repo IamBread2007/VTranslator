@@ -47,3 +47,27 @@ def test_thin_glyph_mask_is_not_empty_and_has_text_pixels():
     ImageDraw.Draw(img).line((20, 10, 20, 50), fill=(0, 0, 0), width=1)
     m = text_mask(img, [Box(x=5, y=5, w=100, h=50)])
     assert m.sum() > 0
+
+
+def _dense_text_page():
+    # Bold text in a tight box: three rows of glyph bars covering 64% of the
+    # page, with a thin bright margin left at the box border.
+    img = Image.new("RGB", (120, 60), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    strokes = np.zeros((60, 120), dtype=bool)
+    for y in (3, 22, 41):
+        for x in (3, 22, 41, 60, 79, 98):
+            draw.rectangle((x, y, x + 15, y + 15), fill=(0, 0, 0))
+            strokes[y : y + 16, x : x + 16] = True
+    return img, strokes
+
+
+def test_dense_text_mask_marks_strokes_not_background():
+    # Over half the box is ink, so a minority vote flips the mask onto the
+    # bubble ground: the glyphs are neither erased nor sampled.
+    img, strokes = _dense_text_page()
+    m = text_mask(img, [Box(x=0, y=0, w=120, h=60)])
+    white = m > 0
+    assert white.any(), "dense text produced an empty mask"
+    overlap = np.count_nonzero(white & strokes) / np.count_nonzero(white)
+    assert overlap > 0.5, f"mask marks background instead of strokes: {overlap:.2f}"

@@ -60,3 +60,24 @@ def test_thin_glyph_falls_back_to_nonempty_sample():
     mask[10:51, 20] = 255
     s = estimate_style(img, box, "text_bubble", 1, mask_roi=mask)
     assert s.color.startswith("#") and len(s.color) == 7
+
+
+def _dense_glyph_bubble():
+    # Bold black glyph bars covering 66% of a white bubble: dense enough that a
+    # minority-ink vote inverts the mask and samples white ground as text.
+    img = Image.new("RGB", (200, 120), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    for y in (12, 41, 70):
+        for x in (4, 36, 68, 100, 132, 164):
+            draw.rectangle((x, y, x + 29, y + 29), fill=(0, 0, 0))
+    return img
+
+
+def test_dense_bubble_text_stays_black():
+    from mt.inpaint import text_mask
+
+    img = _dense_glyph_bubble()
+    box = Box(x=0, y=0, w=200, h=120)
+    mask = text_mask(img, [box])
+    s = estimate_style(img, box, "text_bubble", 1, mask_roi=mask)
+    assert s.color == "#000000"
