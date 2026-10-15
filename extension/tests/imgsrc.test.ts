@@ -151,6 +151,21 @@ describe("background swap/restore", () => {
     expect(el.style.backgroundPosition).toBe("center center");
   });
 
+  it("a re-swap keeps the site's original saved instead of overwriting it with our blob", () => {
+    // The in-place edit re-renders a page: the second swap must not save the
+    // first translation as if it were the site's art.
+    const el = bgDiv();
+    applyBackgroundSwap(el, "blob:https://mt-extension/v1");
+    applyBackgroundSwap(el, "blob:https://mt-extension/v2");
+    expect(el.getAttribute(ORIG_BG)).toBe('url("blob:https://comic.pixiv.net/page-0")');
+    expect(el.style.backgroundImage).toBe('url("blob:https://mt-extension/v2")');
+
+    restoreOriginalBackground(el);
+    expect(el.style.backgroundImage).toBe('url("blob:https://comic.pixiv.net/page-0")');
+    reapplyTranslatedBackground(el);
+    expect(el.style.backgroundImage).toBe('url("blob:https://mt-extension/v2")');
+  });
+
   it("restore is a no-op without a saved original", () => {
     const el = bgDiv();
     restoreOriginalBackground(el);

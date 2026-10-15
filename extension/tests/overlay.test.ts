@@ -1,7 +1,17 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { anchorChip, OverlayLayer, type AnchorBox, type Size } from "../src/overlay";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
+import {
+  anchorChip,
+  blockAt,
+  blockRect,
+  EditLayer,
+  OverlayLayer,
+  type AnchorBox,
+  type EditFrame,
+  type Size,
+} from "../src/overlay";
 import { TTL_MS } from "../src/hudstate";
+import type { Block } from "../src/types";
 
 const vp: Size = { w: 1000, h: 800 };
 const box: AnchorBox = { left: 100, top: 120, right: 500, bottom: 420 };
@@ -226,5 +236,149 @@ describe("OverlayLayer", () => {
     vi.mocked(el.getBoundingClientRect).mockReturnValue(rect({ left: 999, top: 999, right: 1000, bottom: 1000 }));
     window.dispatchEvent(new Event("scroll"));
     expect(chip.style.left).toBe(before);
+  });
+});
+
+function block(id: number, box: { x: number; y: number; w: number; h: number }): Block {
+  return {
+    id,
+    box,
+    render_box: box,
+    kind: "text_bubble",
+    source: "",
+    translation: "",
+    style: { color: "#000000", stroke_color: "#ffffff", stroke_width: 0, font_px: 16, font: "dialogue" },
+  };
+}
+
+describe("blockRect and blockAt", () => {
+  const view: AnchorBox = { left: 100, top: 50, right: 900, bottom: 650 };
+  const page: Size = { w: 1600, h: 1200 }; // the view shows it at half scale
+
+  it("scales a page-pixel box onto the element's frame", () => {
+    expect(blockRect(view, page, { x: 400, y: 300, w: 200, h: 100 })).toEqual({
+      left: 300,
+      top: 200,
+      right: 400,
+      bottom: 250,
+    });
+  });
+
+  it("returns the block under the click and nothing between blocks", () => {
+    const blocks = [block(1, { x: 0, y: 0, w: 600, h: 600 }), block(2, { x: 800, y: 600, w: 400, h: 200 })];
+    // Half-scale: block 1 covers 100..400 x 50..350, block 2 covers 500..700 x 350..450.
+    expect(blockAt(view, page, blocks, 300, 200)?.id).toBe(1);
+    expect(blockAt(view, page, blocks, 600, 400)?.id).toBe(2);
+    // Between the two in page x (400..500 on screen): no block owns the click.
+    expect(blockAt(view, page, blocks, 450, 300)).toBeUndefined();
+  });
+
+  it("treats an empty page size as nothing to hit", () => {
+    expect(blockAt(view, { w: 0, h: 0 }, [block(1, { x: 0, y: 0, w: 10, h: 10 })], 200, 200)).toBeUndefined();
+  });
+});
+
+describe("EditLayer", () => {
+  let edits: EditLayer;
+
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    edits = new EditLayer();
+  });
+
+  afterEach(() => {
+    edits.destroy();
+  });
+
+  function frame(): EditFrame & {
+    onCommit: Mock<(text: string) => void>;
+    onCancel: Mock<() => void>;
+  } {
+    return {
+      rect: { left: 40, top: 60, right: 140, bottom: 120 },
+      value: "xin chào",
+      onCommit: vi.fn<(text: string) => void>(),
+      onCancel: vi.fn<() => void>(),
+    };
+  }
+
+  function panel(): HTMLElement {
+    const node = document.querySelector<HTMLElement>('[data-mt-edit="1"]');
+    expect(node, "editor must be in the DOM").toBeTruthy();
+    return node!;
+  }
+
+  it("opens a textarea at the block's box and commits the text on Enter", () => {
+    const f = frame();
+    edits.open(f);
+    expect(edits.isOpen).toBe(true);
+    expect(panel().style.left).toBe("40px");
+    expect(panel().style.top).toBe("60px");
+    const ta = panel().querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(ta.value).toBe("xin chào");
+
+    ta.value = "chào bạn";
+    ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(f.onCommit).toHaveBeenCalledWith("chào bạn");
+    expect(f.onCancel).not.toHaveBeenCalled();
+    expect(edits.isOpen).toBe(false);
+    expect(document.querySelector('[data-mt-edit="1"]')).toBeNull();
+  });
+
+  it("grows a one-character bubble to a usable editor size", () => {
+    edits.open({ ...frame(), rect: { left: 10, top: 10, right: 20, bottom: 20 } });
+    expect(panel().style.width).toBe("200px");
+    expect(panel().style.height).toBe("96px");
+  });
+
+  it("cancels on Escape and on the Huỷ button without committing", () => {
+    const f = frame();
+    edits.open(f);
+    panel().querySelector<HTMLTextAreaElement>("textarea")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(f.onCommit).not.toHaveBeenCalled();
+    expect(f.onCancel).toHaveBeenCalledTimes(1);
+
+    const second = frame();
+    edits.open(second);
+    panel().querySelector<HTMLButtonElement>("button")!.click();
+    expect(second.onCommit).not.toHaveBeenCalled();
+    expect(second.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Shift+Enter for a newline instead of committing", () => {
+    const f = frame();
+    edits.open(f);
+    const ta = panel().querySelector<HTMLTextAreaElement>("textarea")!;
+    const evt = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+    ta.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(false);
+    expect(f.onCommit).not.toHaveBeenCalled();
+    expect(edits.isOpen).toBe(true);
+  });
+
+  it("owns() the panel subtree so the page click path can shield it", () => {
+    edits.open(frame());
+    const ta = panel().querySelector("textarea")!;
+    expect(edits.owns(ta)).toBe(true);
+    expect(edits.owns(document.body)).toBe(false);
+  });
+
+  it("replaces an open editor instead of stacking a second one", () => {
+    edits.open(frame());
+    edits.open(frame());
+    expect(document.querySelectorAll('[data-mt-edit="1"]')).toHaveLength(1);
+  });
+
+  it("close() dismisses the editor without firing either callback", () => {
+    const f = frame();
+    edits.open(f);
+    edits.close();
+    expect(edits.isOpen).toBe(false);
+    expect(document.querySelector('[data-mt-edit="1"]')).toBeNull();
+    expect(f.onCommit).not.toHaveBeenCalled();
+    expect(f.onCancel).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,7 @@
 // every reader layout.
 
 import { TTL_MS } from "./hudstate";
+import type { Block, Box } from "./types";
 
 export type Corner = "top-left" | "top-right";
 
@@ -67,6 +68,45 @@ function px(value: number): string {
 
 function boxOf(rect: DOMRect): AnchorBox {
   return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+}
+
+/* ---------------- block geometry (edit mode) ---------------- */
+
+/**
+ * Scale a page-pixel box onto the client frame of the element showing that page.
+ *
+ * The element is rarely at 1:1 (readers fit pages to the window), so the block
+ * coordinates the server sent are only usable through this mapping.
+ */
+export function blockRect(view: AnchorBox, page: Size, box: Box): AnchorBox {
+  const sx = page.w > 0 ? (view.right - view.left) / page.w : 0;
+  const sy = page.h > 0 ? (view.bottom - view.top) / page.h : 0;
+  const left = view.left + box.x * sx;
+  const top = view.top + box.y * sy;
+  return { left, top, right: left + box.w * sx, bottom: top + box.h * sy };
+}
+
+/**
+ * The block whose dialogue region covers a client point, or undefined.
+ *
+ * First match wins, which is enough because the detection pass already merges
+ * overlapping duplicates. A point in no box opens no editor, so clicking
+ * between bubbles never edits a neighbour.
+ */
+export function blockAt(
+  view: AnchorBox,
+  page: Size,
+  blocks: readonly Block[],
+  clientX: number,
+  clientY: number,
+): Block | undefined {
+  for (const block of blocks) {
+    const r = blockRect(view, page, block.box);
+    if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+      return block;
+    }
+  }
+  return undefined;
 }
 
 export class OverlayLayer {
@@ -195,5 +235,140 @@ export class OverlayLayer {
     const pos = anchorChip(boxOf(rect), chip, vp, entry.corner);
     node.style.left = px(pos.left);
     node.style.top = px(pos.top);
+  }
+}
+
+/* ---------------- in-place editor ---------------- */
+
+export interface EditFrame {
+  /** The block's on-screen box, which the editor covers. */
+  rect: AnchorBox;
+  /** The block's current translation, the editor's starting text. */
+  value: string;
+  /** The new text, when the user confirms. */
+  onCommit: (text: string) => void;
+  /** The editor was dismissed without a change. */
+  onCancel?: () => void;
+}
+
+// A block box can be smaller than a usable textarea (a one-character bubble),
+// so the editor is never allowed to collapse below this.
+const EDIT_MIN_W = 200;
+const EDIT_MIN_H = 96;
+
+/**
+ * One in-page textarea, opened over the dialogue region the user clicked.
+ *
+ * The translated page is a bitmap, so there is no text node to edit in place;
+ * a fixed panel over the block's box lets the caller re-render the whole page
+ * from the stored blocks instead, which costs no request.
+ */
+export class EditLayer {
+  private readonly host: HTMLElement;
+  private readonly win: Window;
+  private editor: { node: HTMLElement; ta: HTMLTextAreaElement; frame: EditFrame } | null = null;
+
+  constructor(host?: HTMLElement) {
+    this.host = host ?? document.body ?? document.documentElement;
+    const view = this.host.ownerDocument?.defaultView;
+    if (!view) throw new Error("EditLayer host is not attached to a window");
+    this.win = view;
+  }
+
+  get isOpen(): boolean {
+    return this.editor !== null;
+  }
+
+  /** True when `node` is the editor or inside it, so the caller can shield it. */
+  owns(node: EventTarget | null): boolean {
+    return node instanceof Node && this.editor !== null && this.editor.node.contains(node);
+  }
+
+  /** Open the editor for a block. An editor already open is dismissed silently. */
+  open(frame: EditFrame): void {
+    this.close();
+    const doc = this.host.ownerDocument;
+    const node = doc.createElement("div");
+    node.className = "mt-edit";
+    node.setAttribute("data-mt-edit", "1");
+    const w = Math.max(EDIT_MIN_W, Math.round(frame.rect.right - frame.rect.left));
+    const h = Math.max(EDIT_MIN_H, Math.round(frame.rect.bottom - frame.rect.top));
+    node.style.cssText =
+      "position:fixed;z-index:2147483647;display:flex;flex-direction:column;gap:6px;" +
+      "box-sizing:border-box;padding:6px;background:#fff;border:1px solid #1b2a4a;" +
+      "border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.35)";
+    node.style.left = px(clampToViewport(Math.round(frame.rect.left), this.win.innerWidth - w));
+    node.style.top = px(clampToViewport(Math.round(frame.rect.top), this.win.innerHeight - h));
+    node.style.width = px(w);
+    node.style.height = px(h);
+
+    const ta = doc.createElement("textarea");
+    ta.value = frame.value;
+    ta.setAttribute("aria-label", "Sửa lời thoại");
+    ta.style.cssText =
+      "flex:1 1 auto;width:100%;box-sizing:border-box;resize:none;border:1px solid #c7cdd8;" +
+      "border-radius:6px;padding:4px 6px;font:600 14px/1.35 \"MT Be Vietnam Pro\"," +
+      "\"Be Vietnam Pro\",system-ui,sans-serif;color:#1b2a4a";
+
+    const actions = doc.createElement("div");
+    actions.style.cssText = "display:flex;gap:0.5rem;justify-content:flex-end";
+    const cancel = doc.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Huỷ";
+    const commit = doc.createElement("button");
+    commit.type = "button";
+    commit.textContent = "Xong";
+    for (const btn of [cancel, commit]) {
+      btn.style.cssText = "font:600 13px \"MT Be Vietnam Pro\",\"Be Vietnam Pro\",system-ui,sans-serif;" +
+        "padding:0.3rem 0.8rem;border-radius:8px;border:1px solid #c7cdd8;background:#f3f5f9;color:#1b2a4a;cursor:pointer";
+    }
+    commit.style.background = "#1b2a4a";
+    commit.style.color = "#fff";
+    actions.append(cancel, commit);
+
+    const finish = (accepted: boolean): void => {
+      const text = ta.value;
+      this.close();
+      if (accepted) frame.onCommit(text);
+      else frame.onCancel?.();
+    };
+    ta.addEventListener("keydown", (e) => {
+      // Typing must not reach the page: "o"/"t" with Alt held are page
+      // shortcuts, and a reader may act on Enter by paging.
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        finish(true);
+      }
+    });
+    cancel.addEventListener("click", () => finish(false));
+    commit.addEventListener("click", () => finish(true));
+    // A click inside the panel must not reach the reader underneath, which
+    // would page away from the image being edited.
+    const swallow: EventListener = (e) => e.stopPropagation();
+    for (const type of ["click", "dblclick", "mousedown", "mouseup", "pointerdown", "pointerup"]) {
+      node.addEventListener(type, swallow);
+    }
+
+    node.append(ta, actions);
+    this.host.appendChild(node);
+    this.editor = { node, ta, frame };
+    ta.focus();
+    ta.select();
+  }
+
+  /** Dismiss the editor without firing either callback. */
+  close(): void {
+    const current = this.editor;
+    if (!current) return;
+    this.editor = null;
+    current.node.remove();
+  }
+
+  destroy(): void {
+    this.close();
   }
 }

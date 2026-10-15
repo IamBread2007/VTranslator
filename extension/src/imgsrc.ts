@@ -32,7 +32,10 @@ export const APPLIED_BLOB = "data-mt-blob";
  */
 export function applyBackgroundSwap(el: HTMLElement, objectUrl: string): void {
   const prev = el.style.backgroundImage;
-  if (prev) el.setAttribute(ORIG_BG, prev);
+  // Only the first swap saves the site's page. A re-swap — the in-place edit
+  // re-rendering a page — would otherwise save our own previous blob as the
+  // original, and "show original" could never return to the site's art.
+  if (prev && !el.getAttribute(ORIG_BG)) el.setAttribute(ORIG_BG, prev);
   noteOwnStyleWrite(el);
   el.style.backgroundImage = `url("${objectUrl}")`;
 }

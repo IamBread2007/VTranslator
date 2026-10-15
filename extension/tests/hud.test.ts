@@ -128,6 +128,63 @@ describe("stop control", () => {
   });
 });
 
+describe("peek control", () => {
+  it("fires hold true while pressed and false on release", () => {
+    const cb = vi.fn();
+    hud!.setPeek(cb);
+    const btn = pill().querySelector<HTMLButtonElement>(".mt-hud__peek");
+    expect(btn, "peek control must be in the pill").not.toBeNull();
+
+    btn!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    expect(cb).toHaveBeenCalledWith(true);
+    btn!.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    expect(cb).toHaveBeenLastCalledWith(false);
+  });
+
+  it("releases the original when the pointer leaves or the button blurs", () => {
+    const cb = vi.fn();
+    hud!.setPeek(cb);
+    const btn = pill().querySelector<HTMLButtonElement>(".mt-hud__peek")!;
+    btn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    btn.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true }));
+    btn.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true }));
+    btn.dispatchEvent(new Event("blur"));
+    expect(cb.mock.calls.map(([hold]) => hold)).toEqual([true, false, false, false]);
+  });
+
+  it("survives the pill being rebuilt by a state update", () => {
+    hud!.setPeek(vi.fn());
+    hud!.update({ total: 1, done: 1, error: 0, running: false });
+    expect(pill().querySelector(".mt-hud__peek")).not.toBeNull();
+  });
+
+  it("does not start a pill drag from the peek control", () => {
+    hud!.setPeek(vi.fn());
+    hud!.update({ total: 2, done: 1, error: 0, running: true });
+    const btn = pill().querySelector<HTMLElement>(".mt-hud__peek")!;
+    btn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 150, clientY: 115, button: 0 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 320, clientY: 320 }));
+    document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    expect(pill().style.left).toBe("");
+  });
+});
+
+describe("edit toggle", () => {
+  it("reports the requested state and reflects it in aria-pressed", () => {
+    const onToggle = vi.fn();
+    hud!.setEdit(false, onToggle);
+    const btn = pill().querySelector<HTMLButtonElement>(".mt-hud__edit")!;
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+
+    btn.click();
+    expect(onToggle).toHaveBeenCalledWith(true);
+
+    // The caller owns the state: it must feed the new value back in.
+    hud!.setEdit(true, onToggle);
+    expect(pill().querySelector(".mt-hud__edit")!.getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
 describe("drag", () => {
   function dragBy(el: HTMLElement, dx: number, dy: number): void {
     const r = { left: 100, top: 100, right: 200, bottom: 130, width: 100, height: 30 };

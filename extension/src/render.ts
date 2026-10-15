@@ -1,5 +1,5 @@
 import { fitText, type Measure } from "./layout";
-import type { Block, TranslateResponse } from "./types";
+import type { Block } from "./types";
 
 export const FONT_FILES: Record<Block["style"]["font"], string> = {
   dialogue: "PatrickHand-Regular.woff2",
@@ -74,20 +74,33 @@ export interface ComposeOptions {
   onOverflow?: (blockId: number, minPx: number) => void;
 }
 
-export async function composePage(
-  resp: TranslateResponse,
+/** The response's base64 PNG as a Blob; the shared decode for render and edit. */
+export function pngBlob(base64Png: string): Blob {
+  const bytes = Uint8Array.from(atob(base64Png), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: "image/png" });
+}
+
+/**
+ * Draw the blocks over an already-decoded inpainted page.
+ *
+ * Split out of the response path so an in-page edit can re-render from the
+ * stored bitmap and blocks with no server round trip, through the same canvas,
+ * font fitting and overflow reporting as the first render.
+ */
+export async function renderPage(
+  inpainted: Blob,
+  blocks: readonly Block[],
   opts: ComposeOptions = {},
 ): Promise<Blob> {
   await ensureFonts();
-  const bytes = Uint8Array.from(atob(resp.inpainted_png), (c) => c.charCodeAt(0));
-  const bmp = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  const bmp = await createImageBitmap(inpainted);
 
-  const canvas = new OffscreenCanvas(resp.width, resp.height);
+  const canvas = new OffscreenCanvas(bmp.width, bmp.height);
   const ctx = canvas.getContext("2d")!;
-  ctx.drawImage(bmp, 0, 0, resp.width, resp.height);
+  ctx.drawImage(bmp, 0, 0);
   bmp.close();
 
-  for (const block of resp.blocks) {
+  for (const block of blocks) {
     const { font, color, stroke_color, stroke_width } = block.style;
     const family = FAMILY[font];
     const weight = font === "narration" ? 700 : 400;

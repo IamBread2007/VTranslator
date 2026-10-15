@@ -169,8 +169,11 @@ class Pipeline:
         self.max_image_bytes = max_image_bytes
         self.max_dimension = max_dimension
         self.max_pixels = max_pixels
-        # Models (torch/paddle) are not guaranteed thread-safe; LLM call is
-        # outside this lock.
+        # Models (torch/paddle) are not guaranteed thread-safe, and the
+        # detector, OCR and inpainter all load weights onto the same GPU, so a
+        # lock per resource would raise peak VRAM with no guard on when the
+        # second model may be loaded. One lock keeps inference serialised
+        # without such a guard; the LLM call is outside this lock.
         self._infer_lock = threading.Lock()
 
     # ---------- steps 1–2: image safety ----------

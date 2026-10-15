@@ -5,19 +5,22 @@ import {
   resolveImageUrl,
   TranslateQueue,
 } from "./discover";
-import { composePage } from "./render";
+import { pngBlob, renderPage } from "./render";
 import { scan } from "./discovery";
-import { applyStored as applyStoredPage, applyStoredIn, swapIn } from "./apply";
+import {
+  applyStored as applyStoredPage,
+  applyStoredIn,
+  showOriginal,
+  showTranslated,
+  swapIn,
+  togglePeek,
+} from "./apply";
 import { loadSettings } from "./settings";
-import { TranslationStore } from "./store";
+import { TranslationStore, type StoreEntry } from "./store";
 import { enqueuesWholeDocument, normalizeHost, normalizeMode, type ReaderMode } from "./sites";
 import {
   STATE,
-  ORIG_SRC,
-  ORIG_SRCSET,
   APPLIED_BLOB,
-  restoreOriginalBackground,
-  reapplyTranslatedBackground,
   onSiteSourceSwap,
   takeOwnStyleWrites,
 } from "./imgsrc";
@@ -33,11 +36,11 @@ import {
   type BatchView,
 } from "./hudstate";
 import { createHud } from "./hud";
-import { OverlayLayer } from "./overlay";
+import { EditLayer, OverlayLayer, blockAt, blockRect, type AnchorBox, type Size } from "./overlay";
 import { Batch, newBatchId } from "./batch";
 import { trackCoverage } from "./discovery";
 import { DEFAULTS } from "./settings";
-import type { TranslateResponse } from "./types";
+import type { Block, TranslateResponse } from "./types";
 
 const MAX_CONTEXT = 20;
 // How far past the viewport a page still counts as "on screen" for the default
@@ -460,33 +463,9 @@ document.addEventListener("mouseout", (e) => {
 
 /* ---------------- original view (hold click / Alt+O) ---------------- */
 
-function showOriginal(el: Element): void {
-  if (el instanceof HTMLElement && !(el instanceof HTMLImageElement)) {
-    if (el.getAttribute(STATE) !== "done") return;
-    restoreOriginalBackground(el);
-    return;
-  }
-  if (!(el instanceof HTMLImageElement)) return;
-  const orig = el.getAttribute(ORIG_SRC);
-  if (!orig || el.getAttribute(STATE) !== "done") return;
-  const current = el.getAttribute(APPLIED_BLOB);
-  el.setAttribute("src", orig);
-  const origSet = el.getAttribute(ORIG_SRCSET);
-  if (origSet) el.setAttribute("srcset", origSet);
-  if (current) el.dataset.mtHiddenBlob = current;
-}
-function restoreTranslated(el: Element): void {
-  if (el instanceof HTMLElement && !(el instanceof HTMLImageElement)) {
-    reapplyTranslatedBackground(el);
-    return;
-  }
-  if (!(el instanceof HTMLImageElement)) return;
-  const hidden = el.dataset.mtHiddenBlob;
-  if (!hidden) return;
-  el.setAttribute("src", hidden);
-  delete el.dataset.mtHiddenBlob;
-}
 let holdTimer: number | undefined;
+// Holding on one image peeks that image after a moment, so following a single
+// page's art does not need the whole page swapped. Alt+O is the page-wide hold.
 document.addEventListener("mousedown", (e) => {
   const el = e.target;
   if (el instanceof Element && el.getAttribute(STATE) === "done") {
@@ -496,18 +475,167 @@ document.addEventListener("mousedown", (e) => {
 document.addEventListener("mouseup", (e) => {
   window.clearTimeout(holdTimer);
   const el = e.target;
-  if (el instanceof Element) restoreTranslated(el);
+  if (el instanceof Element) showTranslated(el);
 });
+// Alt+O peeks every translated page at once: on a webtoon the single-image
+// gesture only ever shows one panel of a chapter. Keydown repeats are no-ops
+// because the swap is idempotent until the key comes back up.
 document.addEventListener("keydown", (e) => {
   if (!e.altKey || (e.key !== "o" && e.key !== "O")) return;
-  const el = document.activeElement;
-  if (el instanceof Element) showOriginal(el);
+  e.preventDefault();
+  togglePeek(true);
 });
 document.addEventListener("keyup", (e) => {
   if (e.key !== "o" && e.key !== "O") return;
-  const el = document.activeElement;
-  if (el instanceof Element) restoreTranslated(el);
+  togglePeek(false);
 });
+
+/* ---------------- in-place edit (Alt+E) ---------------- */
+
+const edits = new EditLayer();
+let editMode = false;
+
+function setEditMode(on: boolean): void {
+  editMode = on;
+  hud.setEdit(on, setEditMode);
+  if (!on) edits.close();
+  hud.flash(
+    on
+      ? { kind: "done", tone: "ok", text: "Chế độ sửa — bấm vào vùng thoại để sửa chữ" }
+      : { kind: "done", tone: "neutral", text: "Đã tắt chế độ sửa" },
+    TTL_MS.done,
+  );
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!e.altKey || (e.key !== "e" && e.key !== "E")) return;
+  e.preventDefault();
+  setEditMode(!editMode);
+});
+
+/**
+ * Open an editor for the dialogue region under a click.
+ *
+ * Runs on the capture phase so the reader's own click-to-page handler does not
+ * win the event: an edit click on a translated page must edit, not turn the
+ * page. Only translated pages whose heavy detail is still stored can be edited
+ * — past the detail cap the page renders from the object URL alone.
+ */
+document.addEventListener(
+  "click",
+  (e) => {
+    if (edits.owns(e.target)) {
+      e.stopPropagation();
+      return;
+    }
+    if (!editMode || edits.isOpen) return;
+    const target = e.target instanceof Element ? e.target.closest(`[${STATE}="done"]`) : null;
+    if (!target) return;
+    const applied = target.getAttribute(APPLIED_BLOB);
+    const hit = applied ? store.find(applied) : undefined;
+    const entry = hit ? store.getEntry(hit.url) : undefined;
+    if (!hit || !entry) return;
+    const view = boxOf(target.getBoundingClientRect());
+    const known = pageSizeOf(target);
+    if (known) {
+      const block = blockAt(view, known, entry.blocks ?? [], e.clientX, e.clientY);
+      if (!block) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openEditor(hit.url, target, entry, view, known, block);
+      return;
+    }
+    // A background-carried page has no intrinsic size, so its page dimensions
+    // are only known after the stored bitmap decodes; the click's default action
+    // is left alone on this rare path.
+    void openEditorAfterDecode(hit.url, target, entry, view, e);
+  },
+  true,
+);
+
+function boxOf(rect: DOMRect): AnchorBox {
+  return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+}
+
+/** Page-pixel size of an element showing a translated page, when known synchronously. */
+function pageSizeOf(el: Element): Size | null {
+  if (el instanceof HTMLImageElement && el.naturalWidth > 0 && el.naturalHeight > 0) {
+    return { w: el.naturalWidth, h: el.naturalHeight };
+  }
+  return null;
+}
+
+async function openEditorAfterDecode(
+  url: string,
+  target: Element,
+  entry: StoreEntry,
+  view: AnchorBox,
+  e: MouseEvent,
+): Promise<void> {
+  const page = await bitmapSize(entry.inpaintedBlob);
+  if (!page || edits.isOpen) return;
+  const block = blockAt(view, page, entry.blocks ?? [], e.clientX, e.clientY);
+  if (block) openEditor(url, target, entry, view, page, block);
+}
+
+async function bitmapSize(blob: Blob | undefined): Promise<Size | null> {
+  if (!blob) return null;
+  try {
+    const bmp = await createImageBitmap(blob);
+    const size = { w: bmp.width, h: bmp.height };
+    bmp.close();
+    return size;
+  } catch (err) {
+    // The stored bitmap is the edit's canvas; without it there is nothing to
+    // re-render onto, and the page is left as it is.
+    console.warn("MT: cannot read stored page bitmap for editing:", err);
+    return null;
+  }
+}
+
+function openEditor(
+  url: string,
+  target: Element,
+  entry: StoreEntry,
+  view: AnchorBox,
+  page: Size,
+  block: Block,
+): void {
+  edits.open({
+    rect: blockRect(view, page, block.box),
+    value: block.translation,
+    onCommit: (text) => void applyEdit(url, target, entry, block, text),
+  });
+}
+
+/**
+ * Re-render the page with one block's text replaced. Local only: the stored
+ * inpainted bitmap and blocks are what the server already returned, so an edit
+ * costs no request and no perception pass.
+ */
+async function applyEdit(
+  url: string,
+  target: Element,
+  entry: StoreEntry,
+  block: Block,
+  text: string,
+): Promise<void> {
+  if (!entry.inpaintedBlob || !entry.blocks) return;
+  const next = text.trim();
+  // No-op edits skip the render entirely; an emptied box is a real edit that
+  // erases the block, so only "unchanged" returns early.
+  if (next === block.translation) return;
+  const blocks = entry.blocks.map((b) => (b.id === block.id ? { ...b, translation: next } : b));
+  const blob = await renderPage(entry.inpaintedBlob, blocks, {
+    onOverflow: (id, minPx) => console.warn(`MT: block ${id} overflow at ${minPx}px`),
+  });
+  const objectUrl = URL.createObjectURL(blob);
+  swapIn(target, url, objectUrl);
+  if (target instanceof HTMLImageElement) target.setAttribute("src", objectUrl);
+  // The store keeps owning the replaced blob's lifetime, and holds the edited
+  // blocks so a later edit starts from this text.
+  store.set(url, objectUrl, { inpaintedBlob: entry.inpaintedBlob, blocks });
+}
 
 /* ---------------- queue + dispatch ---------------- */
 
@@ -704,7 +832,10 @@ async function translateOne(el: Element, batchId: string): Promise<void> {
   if (batchId !== activeBatchId && batchId !== soloRunId) throw new StaleBatch();
   if ("error" in resp) throw new Error(resp.error);
 
-  const blob = await composePage(resp, {
+  // One decode of the response PNG feeds both the first render and the stored
+  // copy an in-place edit re-renders from; the server already sent the blocks.
+  const inpainted = pngBlob(resp.inpainted_png);
+  const blob = await renderPage(inpainted, resp.blocks, {
     onOverflow: (id, minPx) => console.warn(`MT: block ${id} overflow at ${minPx}px`),
   });
   const objectUrl = URL.createObjectURL(blob);
@@ -712,8 +843,9 @@ async function translateOne(el: Element, batchId: string): Promise<void> {
   swapIn(el, url, objectUrl);
   // The store takes over the blob's lifetime. The element attribute above is
   // only bookkeeping for show-original; releasing here on unmount would throw
-  // away a page the user is about to come back to.
-  store.set(url, objectUrl);
+  // away a page the user is about to come back to. The detail half is dropped
+  // once the page falls behind the store's small edit-history window.
+  store.set(url, objectUrl, { inpaintedBlob: inpainted, blocks: resp.blocks });
   if (el instanceof HTMLImageElement) el.setAttribute("src", objectUrl);
 
   for (const block of resp.blocks) translations.push(block.translation);
@@ -938,6 +1070,13 @@ function retryErrors(): void {
 }
 
 hud.onRetry(retryErrors);
+
+// The pill's hold-to-peek control is the mouse equivalent of the Alt+O hold:
+// press to see the site's own art, release to put the translations back.
+hud.setPeek((hold) => {
+  togglePeek(hold);
+});
+hud.setEdit(false, setEditMode);
 
 // Background-driven retry (e.g. token fixed in options while a page errored)
 // and the context menu "Dịch ảnh này" command.

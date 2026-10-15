@@ -219,7 +219,7 @@ export function widthAt(box: Box, t: number): number {
 
 /**
  * Per-line width caps from a measured contour, sampled at each line's vertical
- * centre — where `composePage` centres the line when it draws it. Absent
+ * centre — where `renderPage` centres the line when it draws it. Absent
  * profile: rectangle caps, so a server that never sends the field renders
  * exactly as before.
  */
@@ -266,7 +266,7 @@ export function lineCaps(
   const b = box.h / 2;
   const lineH = fontPx * lineHeight;
   const inkH = Math.min(fontPx * INK_RATIO, lineH);
-  // composePage centres the block vertically inside the render box, so the
+  // renderPage centres the block vertically inside the render box, so the
   // profiles have to be sampled around that same origin.
   const originY = (box.h - lineCount * lineH) / 2;
 

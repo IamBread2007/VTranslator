@@ -5,13 +5,20 @@
 import { summarize, summarizeBatch, type BatchView, type Counts, type HudView } from "./hudstate";
 
 export interface Hud {
-  /**
-   * Show or hide a Stop control inside the status pill. A control inside the
+  /** Show or hide a Stop control inside the status pill. A control inside the
    * pill rather than a separate fixed button, because a separate button shares
    * the pill's corner and the two overlap. Firing `onStop` twice must be safe:
    * a keypress and a click can land together.
    */
   setStop(active: boolean, onStop?: () => void): void;
+  /**
+   * Hold-to-peek control: pressing shows the page's original art, releasing
+   * puts the translations back. Fired with `false` more than once per hold is
+   * safe, so a lost pointer does not leave the page stuck on the original.
+   */
+  setPeek(onPeek: (hold: boolean) => void): void;
+  /** Edit-mode toggle, drawn with its pressed state. */
+  setEdit(active: boolean, onToggle: (on: boolean) => void): void;
   /** Idle counts hide the pill; anything else replaces its content. */
   update(c: Counts): void;
   /** Persistent batch projection; hides itself when there is nothing to say. */
@@ -54,6 +61,8 @@ export const HUD_CSS = `
 .mt-dialog button{font:inherit;padding:0.45rem 0.9rem;border-radius:8px;border:1px solid #c7cdd8;background:#f3f5f9;color:#1b2a4a;cursor:pointer}
 .mt-dialog button[data-mt-accept]{background:#1b2a4a;color:#fff;border-color:#1b2a4a}
 .mt-hud__stop{font:inherit;padding:0.2rem 0.6rem;border-radius:999px;border:0;background:#b3261e;color:#fff;cursor:pointer}
+.mt-hud__peek,.mt-hud__edit{font:inherit;padding:0.2rem 0.6rem;border-radius:999px;border:0;background:#4f8cff;color:#fff;cursor:pointer}
+.mt-hud__edit[aria-pressed="true"]{background:#0b6b32}
 `;
 
 // Content scripts share the page's CSP. Constructable stylesheets are the
@@ -122,6 +131,11 @@ export function createHud(): Hud {
   let retry: (() => void) | undefined;
   let stopBtn: HTMLButtonElement | null = null;
   let stopCb: (() => void) | undefined;
+  let peekBtn: HTMLButtonElement | null = null;
+  let peekCb: ((hold: boolean) => void) | undefined;
+  let editBtn: HTMLButtonElement | null = null;
+  let editCb: ((on: boolean) => void) | undefined;
+  let editActive = false;
   // Pointer position where the current press started; a press that barely
   // moves is a click (retry/stop), not a drag, so both gestures share the pill.
   let press: { x: number; y: number; left: number; top: number } | null = null;
@@ -136,7 +150,7 @@ export function createHud(): Hud {
     pill.setAttribute("data-tone", view.tone);
     pill.setAttribute("data-kind", view.kind);
     pill.replaceChildren(...(wantsSpinner(view.kind) ? [spinner, label] : [label]));
-    syncStopKids();
+    syncControls();
     pill.style.display = "flex";
   }
 
@@ -153,14 +167,26 @@ export function createHud(): Hud {
     }
   }
 
-  function syncStopKids(): void {
-    // show() rebuilds the pill's children, which detaches the control.
-    if (stopBtn && !pill.contains(stopBtn)) pill.appendChild(stopBtn);
+  function syncControls(): void {
+    // show() rebuilds the pill's children, which detaches the controls.
+    for (const control of [stopBtn, peekBtn, editBtn]) {
+      if (control && !pill.contains(control)) pill.appendChild(control);
+    }
+  }
+
+  function makeControl(className: string, text: string): HTMLButtonElement {
+    const btn = doc.createElement("button");
+    btn.type = "button";
+    btn.className = className;
+    btn.dataset.mtHud = "";
+    btn.textContent = text;
+    return btn;
   }
 
   // The whole pill is the drag handle: no separate grip, so there is nothing
-  // extra to discover or to overlap the text. A press starting on the stop
-  // control or moving less than DRAG_PX stays a click (stop/retry keep working).
+  // extra to discover or to overlap the text. A press starting on one of the
+  // pill's controls or moving less than DRAG_PX stays a click (stop/retry and
+  // the hold controls keep working).
   function onMove(e: PointerEvent): void {
     if (!press) return;
     const dx = e.clientX - press.x;
@@ -178,7 +204,7 @@ export function createHud(): Hud {
   pill.addEventListener("pointerdown", (e) => {
     // Touch presses carry no meaningful button; only gate the mouse.
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if ((e.target as Element | null)?.closest?.(".mt-hud__stop")) return;
+    if ((e.target as Element | null)?.closest?.(".mt-hud__stop, .mt-hud__peek, .mt-hud__edit")) return;
     const r = pill.getBoundingClientRect();
     press = { x: e.clientX, y: e.clientY, left: r.left, top: r.top };
     dragged = false;
@@ -238,24 +264,69 @@ export function createHud(): Hud {
         stopCb = undefined;
         stopBtn?.remove();
         stopBtn = null;
-        syncStopKids();
+        syncControls();
         return;
       }
       if (onStop) stopCb = onStop;
       if (!stopBtn) {
-        const btn = doc.createElement("button");
-        btn.type = "button";
-        btn.className = "mt-hud__stop";
-        btn.dataset.mtHud = "";
-        btn.textContent = "D\u1eebng";
+        const btn = makeControl("mt-hud__stop", "D\u1eebng");
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
           stopCb?.();
         });
         stopBtn = btn;
       }
-      syncStopKids();
+      syncControls();
       if (pill.style.display === "none") pill.style.display = "flex";
+    },
+
+    setPeek(onPeek: (hold: boolean) => void): void {
+      peekCb = onPeek;
+      if (!peekBtn) {
+        const btn = makeControl("mt-hud__peek", "G\u1ed1c");
+        btn.title = "Gi\u1eef \u0111\u1ec3 xem \u1ea3nh g\u1ed1c";
+        const release = (): void => peekCb?.(false);
+        // reveal/release rather than click: the original is only on screen
+        // while the button is held, which is what makes comparing a page safe.
+        btn.addEventListener("pointerdown", (e) => {
+          e.preventDefault();
+          peekCb?.(true);
+        });
+        for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+          btn.addEventListener(type, release);
+        }
+        // Keyboard hold: space/enter repeats while held, and every repeated
+        // "true" is a no-op, so only the release matters.
+        btn.addEventListener("keydown", (e) => {
+          if (e.key !== " " && e.key !== "Enter") return;
+          e.preventDefault();
+          peekCb?.(true);
+        });
+        btn.addEventListener("keyup", (e) => {
+          if (e.key !== " " && e.key !== "Enter") return;
+          e.preventDefault();
+          release();
+        });
+        btn.addEventListener("blur", release);
+        peekBtn = btn;
+      }
+      syncControls();
+    },
+
+    setEdit(active: boolean, onToggle: (on: boolean) => void): void {
+      editActive = active;
+      editCb = onToggle;
+      if (!editBtn) {
+        const btn = makeControl("mt-hud__edit", "S\u1eeda");
+        btn.title = "B\u1eadt/t\u1eaft ch\u1ebf \u0111\u1ed9 s\u1eeda ch\u1eef (Alt+E)";
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          editCb?.(!editActive);
+        });
+        editBtn = btn;
+      }
+      editBtn.setAttribute("aria-pressed", String(editActive));
+      syncControls();
     },
 
     /**

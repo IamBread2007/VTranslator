@@ -7,7 +7,17 @@
 // — is unit-testable rather than only reachable by hand.
 
 import { resolveImageUrl } from "./discover";
-import { APPLIED_BLOB, ORIG_SRC, ORIG_SRCSET, STATE, applyBackgroundSwap } from "./imgsrc";
+import {
+  APPLIED_BLOB,
+  HIDDEN_BG,
+  ORIG_BG,
+  ORIG_SRC,
+  ORIG_SRCSET,
+  STATE,
+  applyBackgroundSwap,
+  reapplyTranslatedBackground,
+  restoreOriginalBackground,
+} from "./imgsrc";
 import type { TranslationStore } from "./store";
 
 /**
@@ -67,4 +77,65 @@ export function applyStoredIn(node: Node, store: TranslationStore): Element[] {
     if (applyStored(img, store)) out.push(img);
   }
   return out;
+}
+
+/* ---------------- hold-to-peek ---------------- */
+
+/**
+ * Swap one translated element back to the page's own source. Returns whether it
+ * changed, so a repeat call while the key is still held stays a no-op instead of
+ * losing what it was showing.
+ *
+ * Only the composed blob is on screen, so this is also the only way to compare
+ * against the artwork the site served.
+ */
+export function showOriginal(el: Element): boolean {
+  if (el.getAttribute(STATE) !== "done") return false;
+  if (el instanceof HTMLImageElement) {
+    const orig = el.getAttribute(ORIG_SRC);
+    const blob = el.getAttribute(APPLIED_BLOB);
+    if (!orig || !blob || el.getAttribute("src") === orig) return false;
+    el.setAttribute("src", orig);
+    // The site's responsive set is what the browser should pick the original
+    // from; without it the saved src is shown at whatever size we saved.
+    const srcset = el.getAttribute(ORIG_SRCSET);
+    if (srcset) el.setAttribute("srcset", srcset);
+    return true;
+  }
+  if (el instanceof HTMLElement && !el.getAttribute(HIDDEN_BG) && el.getAttribute(ORIG_BG)) {
+    restoreOriginalBackground(el);
+    return true;
+  }
+  return false;
+}
+
+/** Put the composed blob back after showOriginal. */
+export function showTranslated(el: Element): boolean {
+  if (el instanceof HTMLImageElement) {
+    const blob = el.getAttribute(APPLIED_BLOB);
+    if (!blob || el.getAttribute("src") === blob) return false;
+    // A restored srcset would outrank src and keep showing the original.
+    el.removeAttribute("srcset");
+    el.setAttribute("src", blob);
+    return true;
+  }
+  if (el instanceof HTMLElement && el.getAttribute(HIDDEN_BG)) {
+    reapplyTranslatedBackground(el);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Hold-to-peek across every translated page under `root`: `hold` swaps them to
+ * the site's own source, releasing puts the composed blobs back. Returns how
+ * many elements changed, so the caller can tell "nothing was translated" from
+ * "the peek happened".
+ */
+export function togglePeek(hold: boolean, root: ParentNode = document): number {
+  let changed = 0;
+  for (const el of root.querySelectorAll(`[${STATE}="done"][${APPLIED_BLOB}]`)) {
+    if (hold ? showOriginal(el) : showTranslated(el)) changed++;
+  }
+  return changed;
 }
