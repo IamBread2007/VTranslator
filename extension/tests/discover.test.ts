@@ -112,6 +112,14 @@ describe("isMangaCandidate", () => {
     expect(resolveImageUrl(img({ src: "/logo.svg" }))).toBeNull();
   });
 
+  it("rejects avatar-sized images but keeps the 200px boundary a candidate", () => {
+    // Regression: comix.to comment avatars are 128x128 and used to inflate
+    // the Alt+T count. The 200px cases pin the threshold against drift.
+    expect(isMangaCandidate(img({ src: "/avatar.webp", width: "128", height: "128" }))).toBe(false);
+    expect(isMangaCandidate(img({ src: "/edge.jpg", width: "200", height: "200" }))).toBe(true);
+    expect(isMangaCandidate(img({ src: "/strip.jpg", width: "200", height: "2400" }))).toBe(true);
+  });
+
   it("rejects elements the extension already processed", () => {
     expect(isMangaCandidate(img({ src: "/a.jpg", "data-mt-state": "pending" }))).toBe(false);
     expect(isMangaCandidate(img({ src: "/a.jpg", "data-mt-state": "done" }))).toBe(false);

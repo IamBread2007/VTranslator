@@ -2,7 +2,7 @@
 // No chrome.* imports here so tests run under jsdom.
 
 const LAZY_ATTRS = ["data-src", "data-lazy-src", "data-original", "data-hi-res-src"];
-const MIN_EDGE = 100; // icons/ads live below this; manga pages are far above.
+const MIN_EDGE = 200; // icons/avatars/ads live below this; manga pages are far above.
 // Anything landscape and wider than this is reader chrome (ad slots, vote bars,
 // site banners), not a page. A webtoon panel can legitimately sit at exactly
 // 3:1, so the comparison is strict and the bound is deliberately not "widest
