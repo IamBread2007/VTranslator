@@ -41,9 +41,17 @@ from .translator import GLOSSARY_CAP, PROMPT_VERSION, TranslationResult
 # v3: PP-OCRv5 mobile det/rec replaced server models (CPU speed), CUDA torch.
 # v4: pt added, which routes to latin_PP-OCRv5_mobile_rec instead of the
 #     chinese-dict probe; v3 perception entries for pt pages use the wrong model.
-PIPELINE_VERSION = "7"
+# v8: blocks carry measured slice widths, so v7 perception entries are stale.
+PIPELINE_VERSION = "8"
 BUBBLE_SHRINK = 0.12
 TEXT_KINDS = ("text_bubble", "text_free")
+
+# Contour profile: how many horizontal slices measure each bubble, how much
+# clearance each measured side keeps from the outline, and what counts as
+# outline ink on the cleaned page (see slice_widths).
+SLICE_COUNT = 12
+SLICE_MARGIN_PX = 6
+SLICE_BORDER_LUMA = 128
 
 log = logging.getLogger("mt.pipeline")
 
@@ -84,6 +92,41 @@ StyleFn = Callable[..., Style]
 def shrink_box(box: Box, frac: float = BUBBLE_SHRINK) -> Box:
     dx, dy = int(box.w * frac), int(box.h * frac)
     return Box(x=box.x + dx, y=box.y + dy, w=box.w - 2 * dx, h=box.h - 2 * dy)
+
+
+def slice_widths(
+    clean: Image.Image, box: Box, bubble: Box | None
+) -> list[float] | None:
+    """Twelve bubble widths across `box`, each normalised to `box.w`.
+
+    `clean` is the grayscale page after inpainting: the text is gone, so at each
+    slice's centre line the first dark pixel met while scanning outward from the
+    bubble's centre is the bubble outline, however irregular its shape. Each
+    side keeps `SLICE_MARGIN_PX` of clearance from that outline so the client
+    never lets a glyph touch the border. Returns None for a block with no
+    containing bubble, the client's cue to keep its shape fallback.
+    """
+    if bubble is None or box.w <= 0 or box.h <= 0:
+        return None
+
+    px = clean.load()
+    left_limit = max(0, bubble.x)
+    right_limit = min(clean.width - 1, bubble.x + bubble.w - 1)
+    cx = min(max(bubble.x + bubble.w // 2, left_limit), right_limit)
+
+    widths: list[float] = []
+    for i in range(SLICE_COUNT):
+        y = box.y + (2 * i + 1) * box.h // (2 * SLICE_COUNT)
+        y = min(max(y, 0), clean.height - 1)
+        left = cx
+        while left > left_limit and px[left - 1, y] >= SLICE_BORDER_LUMA:
+            left -= 1
+        right = cx
+        while right < right_limit and px[right + 1, y] >= SLICE_BORDER_LUMA:
+            right += 1
+        span = right - left + 1 - 2 * SLICE_MARGIN_PX
+        widths.append(min(1.0, max(0.0, span / box.w)))
+    return widths
 
 
 def _png_bytes(img: Image.Image) -> bytes:
@@ -180,16 +223,29 @@ class Pipeline:
         order = sort_reading_order([b for b, _, _ in read], rtl=res.lang == "ja")
         # Glyph pixels come from the mask, computed once per page on the original image.
         page_mask = text_mask(page, [b for b, _, _ in read])
+        # Style MUST be measured on the original page, before inpainting; the
+        # mask only selects which pixels inside that page are glyphs. Every style
+        # is sampled in this pass, before the inpainter touches the page, so no
+        # style can come from a cleaned pixel.
+        styles: dict[int, Style] = {}
+        for idx in order:
+            box, kind, text = read[idx]
+            styles[idx] = self.style_estimator(
+                page, box, kind, text.count("\n") + 1, mask_roi=page_mask
+            )
+
+        if read:
+            inpainted = self.inpainter.inpaint(page, [(b, k) for b, k, _ in read])
+        else:
+            inpainted = page
+        # Slice widths are measured on the cleaned page, not the original: with
+        # the glyphs gone, the outline is the only ink a scan can meet.
+        clean = inpainted.convert("L")
         blocks: list[dict] = []
         for n, idx in enumerate(order, start=1):
             box, kind, text = read[idx]
             parent = next((bb for bb in bubbles if contains(bb, box)), None)
             render = shrink_box(parent) if parent else box
-            # Style MUST be measured on the original page, before inpainting; the
-            # mask only selects which pixels inside that page are glyphs.
-            style = self.style_estimator(
-                page, box, kind, text.count("\n") + 1, mask_roi=page_mask
-            )
             blocks.append(
                 {
                     "id": n,
@@ -197,14 +253,10 @@ class Pipeline:
                     "render_box": render.model_dump(),
                     "kind": kind,
                     "source": text,
-                    "style": style.model_dump(),
+                    "style": styles[idx].model_dump(),
+                    "slice_widths": slice_widths(clean, box, parent),
                 }
             )
-
-        if blocks:
-            inpainted = self.inpainter.inpaint(page, [(b, k) for b, k, _ in read])
-        else:
-            inpainted = page
         meta = {"lang": res.lang, "warnings": res.warnings, "blocks": blocks}
         return meta, _png_bytes(inpainted)
 

@@ -5,6 +5,12 @@ export type Measure = (text: string, fontPx: number) => number;
 export interface Box {
   w: number;
   h: number;
+  /**
+   * Server-measured bubble contour: width fractions of `w`, sampled evenly from
+   * the box's top edge to its bottom edge. Missing or null means the server had
+   * no clean outline to measure, so the rectangle/ellipse fallback stays in use.
+   */
+  slice_widths?: number[] | null;
 }
 
 /**
@@ -194,8 +200,48 @@ function reservedWidth(line: string, fontPx: number, measure: Measure): number {
 }
 
 /**
+ * Width in px available at fractional height `t` of `box` (0 = top edge, 1 =
+ * bottom edge).
+ *
+ * A `slice_widths` profile holds samples spread evenly over the box height, so
+ * the two samples bracketing `t` are lerped; without a profile the whole box
+ * width is available, reproducing the pre-contour rectangle.
+ */
+export function widthAt(box: Box, t: number): number {
+  const slices = box.slice_widths;
+  if (!slices || slices.length === 0) return box.w;
+  if (slices.length === 1) return box.w * slices[0];
+  const pos = Math.min(Math.max(t, 0), 1) * (slices.length - 1);
+  const i = Math.min(Math.floor(pos), slices.length - 2);
+  const frac = pos - i;
+  return box.w * (slices[i] + (slices[i + 1] - slices[i]) * frac);
+}
+
+/**
+ * Per-line width caps from a measured contour, sampled at each line's vertical
+ * centre — where `composePage` centres the line when it draws it. Absent
+ * profile: rectangle caps, so a server that never sends the field renders
+ * exactly as before.
+ */
+export function capsFromSliceWidths(box: Box, lineCount: number): number[] {
+  const slices = box.slice_widths;
+  if (!slices || slices.length === 0) {
+    return new Array<number>(lineCount).fill(box.w);
+  }
+  const caps: number[] = [];
+  for (let i = 0; i < lineCount; i++) {
+    caps.push(widthAt(box, (i + 0.5) / lineCount));
+  }
+  return caps;
+}
+
+/**
  * Usable width for each of `lineCount` lines, measured across the ink band that
  * actually carries glyphs.
+ *
+ * A measured `slice_widths` contour is preferred to either shape: it is the
+ * bubble's own outline, not an idealisation of it. The shapes still serve
+ * blocks (and older servers) that have no profile.
  *
  * For "rect" every line gets the full box width. For "ellipse" each line gets
  * the chord of the inscribed ellipse at whichever edge of its ink band is
@@ -213,6 +259,7 @@ export function lineCaps(
   fontPx: number,
   lineHeight: number,
 ): number[] {
+  if (box.slice_widths?.length) return capsFromSliceWidths(box, lineCount);
   if (shape !== "ellipse") return new Array<number>(lineCount).fill(box.w);
 
   const a = box.w / 2;

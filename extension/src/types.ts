@@ -30,6 +30,13 @@ export interface Block {
   source: string;
   translation: string;
   style: Style;
+  /**
+   * Measured bubble contour: width fractions (0..1 of `box.w`) sampled evenly
+   * from the bubble's top to its bottom, replacing the shrink+ellipse guess.
+   * Null (or absent, from an older server) means layout falls back to the
+   * rectangle/ellipse shape for this block.
+   */
+  slice_widths?: number[] | null;
 }
 
 export interface TranslateOptions {

@@ -28,6 +28,9 @@ class Block(BaseModel):
     source: str
     translation: str
     style: Style
+    # Measured bubble contour (12 widths, fractions of box.w). None on blocks
+    # without a clean bubble, where the client keeps the rectangle/ellipse shape.
+    slice_widths: list[float] | None = None
 
 
 class GlossaryEntry(BaseModel):

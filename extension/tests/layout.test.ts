@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { wrapText, fitText, lineCaps, type Measure } from "../src/layout";
+import { wrapText, fitText, lineCaps, capsFromSliceWidths, type Measure } from "../src/layout";
 
 const m: Measure = (t, px) => t.length * px * 0.5;
 
@@ -223,6 +223,24 @@ describe("ellipse shape", () => {
     const implicit = fitText(text, box, m, { minPx: 8, maxPx: 64, lineHeight: 1.2 });
     const explicit = fitText(text, box, m, { minPx: 8, maxPx: 64, lineHeight: 1.2, shape: "rect" });
     expect(implicit).toEqual(explicit);
+  });
+});
+
+describe("contour slice widths", () => {
+  it("pinches the middle lines where the bubble hourglasses", () => {
+    // Wide top and bottom, narrow waist: the profile the server measures on a
+    // pinched bubble. 12 samples, so line 2 of 5 lands squarely in the waist.
+    const hourglass = [1, 1, 1, 0.4, 0.4, 0.4, 0.4, 0.4, 1, 1, 1, 1];
+    const box = { w: 100, h: 100, slice_widths: hourglass };
+    const caps = capsFromSliceWidths(box, 5);
+    expect(caps[2]).toBeLessThan(caps[0]);
+    expect(caps[2]).toBeLessThan(caps[4]);
+    // The fitter must consult the contour rather than the ellipse guess.
+    expect(lineCaps(box, "ellipse", 5, 10, 1.2)).toEqual(caps);
+  });
+
+  it("falls back to the rectangle when the server sent no profile", () => {
+    expect(capsFromSliceWidths({ w: 100, h: 100 }, 3)).toEqual([100, 100, 100]);
   });
 });
 

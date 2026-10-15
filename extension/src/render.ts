@@ -92,7 +92,7 @@ export async function composePage(
     const family = FAMILY[font];
     const weight = font === "narration" ? 700 : 400;
     const { minPx, maxPx } = fontBounds(block);
-    const fit = fitText(block.translation, block.render_box, makeMeasure(family, weight), {
+    const fit = fitText(block.translation, { ...block.render_box, slice_widths: block.slice_widths }, makeMeasure(family, weight), {
       minPx,
       maxPx,
       lineHeight: 1.2,
