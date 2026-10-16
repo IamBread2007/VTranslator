@@ -1,14 +1,27 @@
-# MangaTranslater — dịch manga/webtoon tiếng Việt ngay trên trang đọc
+# MangaTranslater — đọc manga/webtoon tiếng Việt ngay trên trang đọc
 
-Tiện ích Chrome giúp bạn đọc manga/webtoon bằng tiếng Việt: chữ Nhật/Hàn/Trung trong ảnh
-được xoá và thay bằng chữ Việt, ngay trên trang bạn đang đọc.
+Tiện ích Chrome giúp bạn đọc truyện chữ Nhật/Hàn/Trung bằng tiếng Việt: chữ gốc
+trong ảnh được xoá và thay bằng chữ Việt, ngay trên trang bạn đang đọc.
 
-Gồm hai phần:
+**Bản v1.0 làm được gì:**
+- Bấm **Alt+T** dịch cả chương đang mở (có hỏi trước khi dịch nếu nhiều trang,
+  vì mỗi trang tốn một lần gọi AI).
+- **Di chuột vào ảnh** → nút **Dịch** để dịch từng ảnh lẻ.
+- Giữ **Alt+O** (hoặc nút **Gốc**) để xem lại ảnh gốc, thả ra về bản dịch.
+- Bật chế độ **Sửa** (nút **Sửa** hoặc **Alt+E**), bấm vào bong bóng thoại để
+  gõ lại câu dịch sai — sửa xong hiện ngay, không tốn thêm tiền AI.
+- Lật trang đi rồi quay lại vẫn giữ bản dịch, không phải dịch lại.
+- Tự bỏ qua ảnh đại diện (avatar), ảnh bình luận khi đếm số trang.
+- Nhớ từ riêng/tên riêng và cách xưng hô (anh/em, cậu/tớ…) suốt cả chương.
 
-- **Server** chạy trên máy bạn (địa chỉ `127.0.0.1:8765`) — làm phần nặng: nhận diện khung thoại, đọc chữ, dịch, xoá chữ gốc.
-- **Extension** Chrome — tìm ảnh trên trang, gửi cho server, nhận ảnh đã dịch và hiển thị.
+Gồm hai phần (bạn sẽ cài cả hai):
 
-> Bạn **không cần biết lập trình** để dùng. Làm theo đúng thứ tự các bước dưới đây là được.
+- **Server** chạy trên máy bạn (địa chỉ `127.0.0.1:8765`) — làm phần nặng:
+  nhận diện khung thoại, đọc chữ, dịch, xoá chữ gốc.
+- **Extension** Chrome — tìm ảnh trên trang, gửi cho server, hiển thị ảnh đã dịch.
+
+> Bạn **không cần biết lập trình**. Làm đúng theo từng bước dưới đây là được.
+> Hướng dẫn này viết cho **Windows**. Linux/macOS sẽ bổ sung sau.
 
 ---
 
@@ -16,26 +29,33 @@ Gồm hai phần:
 
 0. [Chuẩn bị](#0-chuẩn-bị)
 1. [Bước 1 — Tạo token (mật khẩu nội bộ)](#bước-1--tạo-token-mật-khẩu-nội-bộ)
-2. [Bước 2 — Lấy API key từ OpenRouter](#bước-2--lấy-api-key-từ-openrouter)
+2. [Bước 2 — Lấy API key để dịch](#bước-2--lấy-api-key-để-dịch)
 3. [Bước 3 — Chạy server](#bước-3--chạy-server)
 4. [Bước 4 — Cài extension vào Chrome](#bước-4--cài-extension-vào-chrome)
 5. [Bước 5 — Điền cài đặt trong Options](#bước-5--điền-cài-đặt-trong-options)
 6. [Bước 6 — Bắt đầu dịch](#bước-6--bắt-đầu-dịch)
-7. [Lỗi thường gặp](#lỗi-thường-gặp)
-8. [Bản quyền và ghi nhận](#bản-quyền-và-ghi-nhận)
+7. [Cập nhật lên bản mới](#cập-nhật-lên-bản-mới)
+8. [Lỗi thường gặp](#lỗi-thường-gặp)
+9. [Bản quyền và ghi nhận](#bản-quyền-và-ghi-nhận)
 
 ---
 
 ## 0. Chuẩn bị
 
-Cài sẵn các phần mềm sau:
+Cài sẵn các phần mềm sau (bấm vào tên để tải):
 
-- **Python 3.12** — tải từ python.org. (PaddleOCR chưa chạy trên Python 3.14.)
-- **Node.js 18 trở lên** — tải từ nodejs.org. Dùng để đóng gói extension.
+- **Python 3.12** — tải từ python.org. (Quan trọng: đúng bản 3.12. Bản 3.14
+  chưa chạy được thư viện đọc chữ.)
+  - Khi cài, **tích chọn ô "Add python.exe to PATH"** ở màn hình đầu tiên.
+- **Node.js 18 trở lên** — tải từ nodejs.org. Chỉ dùng một lần để đóng gói
+  extension.
 - **Google Chrome**.
-- Máy có GPU NVIDIA: có thể cài bản `torch` có CUDA (xem `server/requirements.txt`). Không có GPU vẫn chạy được, chỉ chậm hơn.
 
-Tải mã nguồn về máy (nút **Code → Download ZIP** trên GitHub, rồi giải nén), hoặc dùng git:
+Máy có card NVIDIA thì dịch nhanh hơn, không có vẫn chạy được (chậm hơn).
+RAM nên từ 8GB trở lên.
+
+Tải mã nguồn về máy (**Code → Download ZIP** trên GitHub, rồi giải nén), hoặc
+dùng git:
 
 ```bash
 git clone <https://github.com/IamBread2007/VTranslator.git>
@@ -47,27 +67,30 @@ git clone <https://github.com/IamBread2007/VTranslator.git>
 
 **Token** là mật khẩu để extension và server nhận ra nhau. Chỉ dùng trên máy bạn.
 
-1. Mở **PowerShell** hoặc **Terminal** trong thư mục `server`.
+1. Mở **PowerShell** trong thư mục `server` (giữ Shift + chuột phải vào thư mục
+   `server` → **Open PowerShell window here**).
 2. Chạy lệnh:
 
    ```bash
    python -c "import secrets; print(secrets.token_urlsafe(32))"
    ```
 
-3. Lệnh in ra một chuỗi ký tự dài, ví dụ `Xk3...` (chuỗi của bạn sẽ khác). **Copy và giữ kín chuỗi này.**
+3. Lệnh in ra một chuỗi ký tự dài. **Copy và giữ kín chuỗi này.**
 
-> ⚠️ **Không** gửi token cho người khác, không đăng lên GitHub, không chụp màn hình để chia sẻ.
+> ⚠️ **Không** gửi token cho người khác, không đăng lên mạng, không chụp màn
+> hình chia sẻ.
 
 ---
 
-## Bước 2 — Lấy API key từ OpenRouter
+## Bước 2 — Lấy API key để dịch
 
-Server cần một model AI để đọc và dịch chữ. Chúng tôi khuyên dùng **OpenRouter**: một dịch vụ cho phép dùng nhiều model AI qua một địa chỉ duy nhất, và có sẵn các model miễn phí.
+Server cần một dịch vụ AI để đọc và dịch chữ. Chúng tôi khuyên dùng
+**OpenRouter**: một địa chỉ duy nhất để dùng nhiều model AI, có sẵn model miễn phí.
 
 ### 2.1. Tạo tài khoản
 
-1. Vào **<https://openrouter.ai>** → chọn **Sign Up** (Đăng ký) hoặc **Sign In**.
-2. Làm theo hướng dẫn để xác nhận email. Giao diện có thể thay đổi theo thời gian, nếu khác thì tìm nút đăng ký trên trang chủ.
+1. Vào **<https://openrouter.ai>** → **Sign Up** (Đăng ký).
+2. Làm theo hướng dẫn để xác nhận email.
 
 ### 2.2. Tạo API key
 
@@ -75,30 +98,36 @@ Server cần một model AI để đọc và dịch chữ. Chúng tôi khuyên d
 2. Bấm **Create Key** (Tạo key), đặt tên tuỳ ý, rồi xác nhận.
 3. Copy chuỗi key vừa tạo. Key thường bắt đầu bằng `sk-or-`.
 
-> ⚠️ Key là mật khẩu tài khoản của bạn. **Không** dán vào mã nguồn, **không** đưa lên GitHub, **không** chia sẻ. Nếu lỡ lộ, vào trang Keys và xoá key đó đi, rồi tạo key mới.
+> ⚠️ Key là mật khẩu tài khoản của bạn. **Không** dán vào mã nguồn,
+> **không** đưa lên GitHub, **không** chia sẻ. Nếu lỡ lộ, vào trang Keys xoá
+> key đó đi rồi tạo key mới.
 
 ### 2.3. Chọn model
 
-Model quyết định chất lượng dịch và tốc độ. Model phải **đọc được ảnh** (hỗ trợ "image input") vì extension gửi ảnh trang manga cho model.
+Model quyết định chất lượng dịch và tốc độ. Model phải **đọc được ảnh**
+(vì extension gửi ảnh trang manga cho model).
 
-- Xem danh sách model tại **<https://openrouter.ai/models>** và bật bộ lọc **Input: Image** (đầu vào là ảnh).
-- Muốn dùng miễn phí: bật bộ lọc **Free** hoặc tìm model có đuôi **`:free`** (ví dụ `google/gemma-4-31b-it:free`).
-- Tên model ghi đúng như trên trang chi tiết của model, kể cả đuôi `:free`.
+- Xem danh sách tại **<https://openrouter.ai/models>** và bật bộ lọc
+  **Input: Image**.
+- Muốn dùng miễn phí: bật bộ lọc **Free** hoặc tìm model có đuôi **`:free`**
+  (ví dụ `google/gemma-4-31b-it:free`).
+- Tên model ghi đúng như trên trang chi tiết, kể cả đuôi `:free`.
 
-> 💡 **Lời khuyên:** Model miễn phí của OpenRouter đủ để thử nghiệm. Tuy nhiên:
-> - Miễn phí có giới hạn: khoảng **50 yêu cầu/ngày** nếu tài khoản chưa nạp credit. Nạp ít nhất $10 credit thì giới hạn lên khoảng **1000 yêu cầu/ngày** (theo [FAQ của OpenRouter](https://openrouter.ai/docs/faq)).
-> - Model miễn phí có thể bị gỡ hoặc đổi. Nếu lỗi, chọn model `:free` khác có ảnh.
-> - Một số nhà cung cấp của model miễn phí có thể dùng dữ liệu bạn gửi để huấn luyện. Nếu bạn dịch manga riêng tư, vào **Settings → Privacy** trên OpenRouter và tắt tùy chọn cho phép nhà cung cấp huấn luyện trên dữ liệu, hoặc chọn model trả phí. Xem thêm [Provider Logging](https://openrouter.ai/docs/guides/privacy/provider-logging).
+> 💡 **Lưu ý về bản miễn phí:** giới hạn khoảng **50 yêu cầu/ngày** nếu chưa nạp
+> tiền, khoảng **1000 yêu cầu/ngày** nếu đã nạp từ $10 (theo FAQ của OpenRouter).
+> Model miễn phí có thể bị gỡ hoặc đổi — nếu báo lỗi, chọn model `:free`
+> khác có hỗ trợ ảnh.
 
-### 2.4. Các nguồn API khác (tuỳ chọn)
+### 2.4. Các nguồn API khác (tuỳ chọn, bỏ qua cũng được)
 
-Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi đó đổi `LLM_BASE_URL` và `LLM_API_KEY` tương ứng:
+Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi đó đổi
+`LLM_BASE_URL` và `LLM_API_KEY` tương ứng (xem file `server/.env.example`):
 
-| Dịch vụ | Tài liệu chính thức | Ghi chú |
-| --- | --- | --- |
-| Google Gemini (AI Studio) | <https://ai.google.dev/gemini-api/docs/rate-limits> | Có giới hạn yêu cầu miễn phí, xem trang này để biết hạn mức hiện tại. |
-| Groq | <https://console.groq.com/docs/openai> | Tương thích OpenAI, base URL `https://api.groq.com/openai/v1`. Kiểm tra model có hỗ trợ ảnh tại <https://console.groq.com/docs/models>. |
-| Ollama (chạy model ngay trên máy bạn) | <https://docs.ollama.com/api/openai-compatibility> | Miễn phí, không cần key, nhưng cần máy đủ mạnh. Base URL `http://127.0.0.1:11434/v1`. |
+| Dịch vụ | Ghi chú |
+| --- | --- |
+| Google Gemini (AI Studio) | Có hạn mức miễn phí, xem <https://ai.google.dev/gemini-api/docs/rate-limits> |
+| Groq | Base URL `https://api.groq.com/openai/v1`, kiểm tra model có hỗ trợ ảnh tại <https://console.groq.com/docs/models> |
+| Ollama (chạy model ngay trên máy bạn) | Miễn phí, không cần key. Base URL `http://127.0.0.1:11434/v1`. **Lưu ý:** model phải đọc được ảnh (model chỉ-chữ như họ HY-MT/Sakura sẽ không dịch được vì server luôn gửi kèm ảnh trang truyện) |
 
 ---
 
@@ -112,13 +141,15 @@ Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi
    .venv\Scripts\pip install -r requirements.txt
    ```
 
+   (Lần đầu mất vài phút để tải thư viện.)
+
 2. Tạo file cấu hình từ mẫu:
 
    ```bash
    copy .env.example .env
    ```
 
-3. Mở file `server\.env` bằng Notepad (hoặc bất kỳ trình soạn thảo nào) và điền:
+3. Mở file `server\.env` bằng Notepad và điền:
 
    ```text
    MT_TOKEN=<token bạn tạo ở Bước 1>
@@ -127,10 +158,11 @@ Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi
    LLM_MODEL=<tên model bạn chọn ở Bước 2.3>
    ```
 
-   Ví dụ (đây chỉ là chỗ minh hoạ, **không** phải key thật):
+   Ví dụ (chỗ này chỉ minh hoạ, **không** phải key thật):
    `LLM_MODEL=google/gemma-4-31b-it:free`
 
-   > `server\.env` chứa bí mật của bạn. File này đã được `.gitignore` chặn, không tự động đưa lên GitHub. **Đừng** sao chép nó ra chỗ khác để chia sẻ.
+   > File `server\.env` chứa bí mật của bạn, đã được chặn đưa lên GitHub.
+   > **Đừng** copy nó đi nơi khác để chia sẻ.
 
 4. Chạy server:
 
@@ -140,7 +172,8 @@ Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi
 
    Để cửa sổ này mở trong lúc dùng.
 
-5. Kiểm tra server đang chạy: mở trình duyệt, vào <http://127.0.0.1:8765/health>. Nếu hiện `{"ok":true}` là được.
+5. Kiểm tra: mở trình duyệt, vào <http://127.0.0.1:8765/health>.
+   Nếu hiện `{"ok":true}` là được.
 
 > Đổi nội dung `.env` thì phải **tắt và chạy lại** server.
 
@@ -156,15 +189,13 @@ Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi
    npm run build
    ```
 
-   Sau bước này có thư mục `extension\dist`. Đây là thư mục bạn cần cài vào Chrome.
+   Sau bước này có thư mục `extension\dist`. Đây là thư mục bạn cần cài.
 
 2. Mở Chrome, gõ vào thanh địa chỉ: `chrome://extensions`
 3. Bật công tắc **Developer mode** (Chế độ nhà phát triển) ở góc trên bên phải.
 4. Bấm **Load unpacked** (Tải tiện ích đã giải nén).
 5. Chọn thư mục **`extension\dist`** → bấm **Select Folder**.
-6. Thấy tiện ích **Manga Translator** hiện ra là đã cài xong.
-
-Sau này sửa code: chạy lại `npm run build`, rồi bấm biểu tượng **Reload** (vòng tròn) của tiện ích trong `chrome://extensions`.
+6. Thấy tiện ích **Manga Translator** hiện ra là cài xong.
 
 ---
 
@@ -172,14 +203,26 @@ Sau này sửa code: chạy lại `npm run build`, rồi bấm biểu tượng *
 
 1. Chuột phải biểu tượng extension trên thanh Chrome → **Options**.
    (Hoặc: `chrome://extensions` → **Details** → **Extension options**.)
-
 2. Điền:
-   - **Địa chỉ server**: `http://127.0.0.1:8765`
+   - **URL server local**: `http://127.0.0.1:8765`
    - **Token**: dán đúng token ở Bước 1.
-3. Bấm **Kiểm tra kết nối**. Kết quả có thể là:
+   - **Ngôn ngữ nguồn**: để **Tự động nhận diện** (Nhật/Hàn/Trung/Anh),
+     hoặc chọn tay nếu trang nào đó nhận diện sai.
+3. **Giới hạn khi dịch cả chương** (để không bị tốn tiền oan):
+   - **Số trang dịch trước khi hỏi** (mặc định 10): dịch tới đây sẽ hiện hộp
+     hỏi có dịch tiếp không.
+   - **Số trang tối đa mỗi lần**: trần cứng cho một lần Alt+T.
+4. **Cách đọc của từng trang** (quan trọng với trang truyện):
+   - Mặc định (`auto`) Alt+T chỉ dịch ảnh gần màn hình — đủ cho Facebook,
+     chat, diễn đàn.
+   - Với trang đọc truyện, thêm host (ví dụ `mangadex.org`) và chọn cách đọc:
+     `vertical-scroll` (cuộn dọc một dải dài), `paged` (lật từng trang như
+     sách), `horizontal-slide` (trượt ngang). Khai báo đúng thì Alt+T mới
+     gom đủ trang của cả chương.
+5. Bấm **Kiểm tra kết nối**. Kết quả có thể là:
    - `Server local chưa chạy` → quay lại Bước 3, bật server.
-   - `Server chạy nhưng token sai` → kiểm tra lại token có khớp với `MT_TOKEN` không.
-   - `Kết nối và token hợp lệ` → xong.
+   - `Server chạy nhưng token sai` → kiểm tra token có khớp `MT_TOKEN` không.
+   - `Kết nối và token hợp lệ` → xong. Bấm **Lưu**.
 
 ---
 
@@ -188,11 +231,40 @@ Sau này sửa code: chạy lại `npm run build`, rồi bấm biểu tượng *
 Mở một trang manga/webtoon bạn muốn đọc, rồi dùng một trong các cách sau:
 
 - **Di chuột vào ảnh** → bấm nút **Dịch** ở góc trên-trái ảnh để dịch từng ảnh.
-- **Alt + T**: dịch tất cả ảnh manga đang hiện trên màn hình. Ảnh được dịch lần lượt, lấy ngữ cảnh các trang trước để câu dịch nhất quán.
-- **Giữ Alt + O**: xem ảnh gốc (chưa dịch). Thả ra để xem lại bản dịch.
+- **Alt + T**: dịch tất cả ảnh manga đang hiện trên màn hình. Ảnh được dịch
+  lần lượt, lấy ngữ cảnh các trang trước để câu dịch nhất quán. Nếu nhiều
+  trang, extension sẽ hỏi trước khi dịch tiếp.
+- **Alt + S**: dừng lô dịch đang chạy.
+- **Giữ Alt + O** (hoặc nút **Gốc** trên thanh công cụ): xem ảnh gốc
+  (chưa dịch). Thả ra để xem lại bản dịch.
+- **Sửa** (hoặc **Alt + E**): bật chế độ sửa, bấm vào bong bóng thoại để gõ
+  lại câu dịch sai. Sửa xong hiện ngay, không tốn thêm tiền AI.
 - **Chuột phải vào ảnh → "Dịch ảnh này"**.
 
-Nếu một ảnh báo lỗi (badge `Lỗi — bấm để thử lại`), kiểm tra server đang chạy rồi bấm badge đó để thử lại. Trang vẫn đọc bình thường.
+Nếu một ảnh báo lỗi (badge `Lỗi — bấm để thử lại`), kiểm tra server đang chạy
+rồi bấm badge đó để thử lại. Trang vẫn đọc bình thường.
+
+**Mẹo đọc truyện dài:** với truyện lật từng trang (kiểu MangaDex, Comix),
+cứ Alt+T ở mỗi trang khi đọc tới — trang đã dịch được giữ lại, không mất
+tiền dịch lại khi quay lại.
+
+---
+
+## Cập nhật lên bản mới
+
+Khi có bản mới (ví dụ từ v1.0 lên v1.1), làm theo thứ tự này — thiếu bước nào
+là bản mới không có hiệu lực:
+
+1. Tải code mới về (git pull hoặc tải ZIP mới), đè lên thư mục cũ
+   (giữ lại file `server\.env` của bạn — đừng xoá, đừng ghi đè).
+2. Nếu bản mới ghi "cần cài thêm thư viện": chạy lại
+   `.venv\Scripts\pip install -r requirements.txt` trong thư mục `server`.
+3. **Tắt server cũ, chạy lại server** (bước này ai cũng quên):
+   `.venv\Scripts\python -m mt`
+4. Trong thư mục `extension`, chạy lại `npm run build`.
+5. Vào `chrome://extensions` → bấm nút **Reload** (vòng tròn) của tiện ích.
+6. **F5 (tải lại) các tab truyện đang mở** — tab cũ vẫn chạy code cũ cho tới
+   khi tải lại trang.
 
 ---
 
@@ -201,12 +273,16 @@ Nếu một ảnh báo lỗi (badge `Lỗi — bấm để thử lại`), kiểm
 | Thông báo | Nguyên nhân | Cách xử lý |
 | --- | --- | --- |
 | `Server local chưa chạy` | Server đã tắt hoặc sai cổng | Chạy lại `python -m mt` trong thư mục `server` |
-| `Sai token` | Token trong Options không khớp `MT_TOKEN` | Dán lại đúng token |
+| `Sai token` / `token sai` | Token trong Options không khớp `MT_TOKEN` | Dán lại đúng token, bấm Lưu |
 | `Dịch quá thời gian` | Model chậm hoặc quá tải | Thử lại; hoặc đổi sang model khác trong `LLM_MODEL` |
-| `LLM HTTP 401` trong log server | API key sai hoặc chưa điền | Kiểm tra `LLM_API_KEY` trong `server\.env`, rồi khởi động lại server |
-| `LLM HTTP 429` | Đã vượt giới hạn yêu cầu miễn phí | Đợi hết ngày, hoặc nạp credit, hoặc chọn model khác |
-| `Ảnh quá lớn` | Ảnh vượt 25 MB hoặc 30 megapixel | Ảnh bị chặn trước khi xử lý |
+| `LLM HTTP 401` trong log server | API key sai hoặc chưa điền | Kiểm tra `LLM_API_KEY` trong `server\.env`, khởi động lại server |
+| `LLM HTTP 429` | Vượt giới hạn yêu cầu miễn phí | Đợi hết ngày, nạp credit, hoặc chọn model khác |
+| `Ảnh quá lớn` | Ảnh vượt 25 MB hoặc 30 megapixel | Ảnh bị chặn trước khi xử lý, không mất tiền |
+| Alt+T đếm nhiều hơn số trang truyện | Đếm cả avatar/ảnh bình luận | Từ v1.0 extension đã tự bỏ qua avatar và ảnh trong khung bình luận. Nếu vẫn thấy, thử F5 tải lại trang rồi Alt+T lại |
+| Alt+T báo xong nhưng vài trang trắng trơn | Trang đó chưa tải xong khi bấm | Lật tới trang đó cho ảnh hiện ra rồi Alt+T lại |
 | Lỗi cài `torch` (file bị khoá) | Server đang chạy và giữ thư viện | Tắt server trước khi cài |
+| Trang Cloudflare bắt xác minh | Trang truyện chống bot | Mở trang bằng Chrome thường, bấm xác minh một lần rồi hãy dịch |
+| Dùng model local Ollama mà không dịch được | Model chỉ-chữ (không đọc ảnh) | Server luôn gửi kèm ảnh trang truyện, model chỉ-chữ sẽ treo tới hết giờ. Hãy dùng model đọc được ảnh, hoặc hỏi người rành để bật chế độ chỉ-chữ |
 
 ---
 

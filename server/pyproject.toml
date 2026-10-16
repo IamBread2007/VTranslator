@@ -1,6 +1,6 @@
 [project]
 name = "mt"
-version = "0.1.0"
+version = "1.0.0"
 description = "MangaTranslater local server: bubble detection, OCR, translation, inpainting"
 requires-python = ">=3.12"
 

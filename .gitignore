@@ -5,6 +5,8 @@ __pycache__/
 server/.venv/
 node_modules/
 extension/dist/
+.codegraph/
+dogfood-output/
 .pytest_cache/
 workspace/
 .superpowers/
