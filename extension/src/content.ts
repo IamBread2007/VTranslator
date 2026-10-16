@@ -1,7 +1,7 @@
 // Content script: candidate discovery, single-file translate queue, image swap.
 import {
   isMangaCandidate,
-  isVisibleCandidate,
+  isDispatchableCandidate,
   resolveImageUrl,
   TranslateQueue,
 } from "./discover";
@@ -665,7 +665,7 @@ function enqueue(el: Element, opts: { priority?: boolean } = {}): void {
     hud.update({ total: 0, done: 0, error: 0, running: false });
   }
   if (el.getAttribute(STATE) === "pending" || el.getAttribute(STATE) === "done") return;
-  if (!isMangaCandidate(el) || !isVisibleCandidate(el)) return;
+  if (!isMangaCandidate(el) || !isDispatchableCandidate(el)) return;
   // A page the store already holds is not work: the blob goes straight back on.
   // On a paged reader this is the difference between returning to page 3 and
   // paying the full perception + LLM cost for a translation that still exists.

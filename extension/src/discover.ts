@@ -108,13 +108,14 @@ export function resolveImageUrl(el: Element): string | null {
   return null;
 }
 
-function knownSize(el: HTMLImageElement): { w: number; h: number } | null {
+function knownSize(el: Element): { w: number; h: number } | null {
   const attr = (n: string): number => {
     const v = Number.parseInt(el.getAttribute(n) || "", 10);
     return Number.isFinite(v) ? v : 0;
   };
-  const w = el.naturalWidth || attr("width");
-  const h = el.naturalHeight || attr("height");
+  const img = el instanceof HTMLImageElement ? el : null;
+  const w = img?.naturalWidth || attr("width");
+  const h = img?.naturalHeight || attr("height");
   return w > 0 && h > 0 ? { w, h } : null;
 }
 
@@ -163,6 +164,24 @@ export function isMangaCandidate(el: Element): boolean {
 export function isVisibleCandidate(el: Element): boolean {
   const r = el.getBoundingClientRect();
   return r.width >= MIN_EDGE && r.height >= MIN_EDGE;
+}
+
+/**
+ * Dispatch gate replacing the bare visibility check at enqueue time. It
+ * additionally admits an element with no rendered box when its bitmap size is
+ * already known: that is the shape of a decoded-but-unmounted page in a
+ * virtualized reader, which `scan` counts and the batch ledger waits for.
+ */
+export function isDispatchableCandidate(el: Element): boolean {
+  // Rendered and big enough: the normal case.
+  if (isVisibleCandidate(el)) return true;
+  // Laid out but small: dashboard chrome, never translatable, never queued.
+  const r = el.getBoundingClientRect();
+  if (r.width > 0 || r.height > 0) return false;
+  // Not laid out yet: only queue when the bitmap size is already known
+  // (decoded blob or width/height attributes), i.e. a real lazy page rather
+  // than an unloaded placeholder of unknown size.
+  return knownSize(el) !== null;
 }
 
 interface Entry {

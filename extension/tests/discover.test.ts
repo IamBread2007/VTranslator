@@ -4,6 +4,7 @@ import {
   resolveImageUrl,
   isMangaCandidate,
   isVisibleCandidate,
+  isDispatchableCandidate,
   TranslateQueue,
 } from "../src/discover";
 
@@ -223,10 +224,46 @@ describe("isVisibleCandidate", () => {
   });
 });
 
+describe("isDispatchableCandidate", () => {
+  it("accepts an unmounted page whose bitmap size is already decoded", () => {
+    // Virtualized readers (MangaDex strip) keep not-yet-viewed pages at rect 0x0
+    // while their blob bitmap is already decoded, so natural size is known.
+    // scan counts these pages, so refusing them at enqueue stalls the batch.
+    const el = withNaturalSize(img({ src: "blob:https://mangadex.org/page-2" }), 768, 1087);
+    expect(isDispatchableCandidate(el)).toBe(true);
+  });
+
+  it("accepts an unmounted page whose size is declared by width/height attributes", () => {
+    expect(isDispatchableCandidate(img({ src: "/lazy.jpg", width: "800", height: "1200" }))).toBe(true);
+  });
+
+  it("rejects an unloaded placeholder of unknown size (0x0 rect, no size)", () => {
+    expect(isDispatchableCandidate(img({ src: "/unknown.jpg" }))).toBe(false);
+  });
+
+  it("rejects a laid-out avatar even when its natural bitmap is large", () => {
+    // 40x40 rendered is dashboard chrome; the bitmap being 1065x1065 does not
+    // make it a page.
+    const el = renderedEl(withNaturalSize(img({ src: "/avatar.png" }), 1065, 1065), 40, 40);
+    expect(isDispatchableCandidate(el)).toBe(false);
+  });
+
+  it("accepts a rendered page-sized image", () => {
+    expect(isDispatchableCandidate(renderedEl(img({ src: "/p1.jpg" }), 500, 826))).toBe(true);
+  });
+});
+
 function bgDiv(bg?: string): HTMLDivElement {
   const el = document.createElement("div");
   if (bg) el.style.backgroundImage = bg;
   document.body.appendChild(el);
+  return el;
+}
+
+/** jsdom's naturalWidth/Height are prototype getters stuck at 0; shadow them. */
+function withNaturalSize(el: HTMLImageElement, w: number, h: number): HTMLImageElement {
+  Object.defineProperty(el, "naturalWidth", { value: w });
+  Object.defineProperty(el, "naturalHeight", { value: h });
   return el;
 }
 
