@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { scan, trackCoverage } from "../src/discovery";
+import { isCountableCandidate, scan, trackCoverage } from "../src/discovery";
 
 const PAD = 1500;
 
@@ -115,6 +115,37 @@ describe("scan", () => {
       expect(scan(document, { wholeDocument: true, padPx: PAD, ignoredSubtrees: [] })).toContain(buried);
       expect(scan(document, { wholeDocument: true, padPx: PAD, ignoredSubtrees: [".cm-widget"] })).not.toContain(buried);
     });
+  });
+});
+
+describe("isCountableCandidate", () => {
+  /** Sets intrinsic size, which jsdom images otherwise do not have. */
+  function natural(el: HTMLImageElement, w: number, h: number): void {
+    Object.defineProperty(el, "naturalWidth", { value: w, configurable: true });
+    Object.defineProperty(el, "naturalHeight", { value: h, configurable: true });
+  }
+
+  it("rejects an image rendered below the dispatch floor even when it is naturally large", () => {
+    // Live case: the MangaDex "Support us" banner, 567x786 natural but 128px
+    // rendered. scan accepts it — its intrinsic size passes the manga filters —
+    // yet enqueue() refuses it, so counting it promises work that never happens.
+    const el = img({ src: "/banner.png" });
+    at(el, 0, 128, 177);
+    natural(el, 567, 786);
+    expect(scan(document, { wholeDocument: true, padPx: PAD, ignoredSubtrees: [] })).toContain(el);
+    expect(isCountableCandidate(el)).toBe(false);
+  });
+
+  it("keeps an unlaid-out lazy image countable", () => {
+    // Lazy readers: a page whose bitmap has not mounted yet has a 0x0 rect and
+    // is still real work once the reader renders it.
+    const el = img({ src: "/lazy.jpg" }); // jsdom leaves the rect 0x0
+    expect(isCountableCandidate(el)).toBe(true);
+  });
+
+  it("counts a page rendered at or above the dispatch floor", () => {
+    const el = at(img({ src: "/page.jpg" }), 0, 800, 1200);
+    expect(isCountableCandidate(el)).toBe(true);
   });
 });
 

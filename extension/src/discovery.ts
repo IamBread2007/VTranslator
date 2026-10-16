@@ -1,7 +1,7 @@
 // The discovery pass and coverage accounting.
 // Deliberately DOM-free of chrome.* so it runs under jsdom in unit tests.
 
-import { isMangaCandidate } from "./discover";
+import { isMangaCandidate, isVisibleCandidate } from "./discover";
 
 export type Coverage = "complete" | "progressive";
 
@@ -49,6 +49,20 @@ export function scan(root: ParentNode, opts: ScanOptions): Element[] {
     out.push(el);
   }
   return out;
+}
+
+/**
+ * Whether an element that passed `scan` should be counted as work.
+ *
+ * `enqueue()` refuses an element whose rendered box is below the dispatch floor
+ * (`isVisibleCandidate`), so a laid-out element under MIN_EDGE can never become
+ * a translation: counting it would promise work that never happens. A 0x0 rect
+ * is not that case — it means "not laid out yet", which is most of a lazy
+ * reader, so those stay countable until the reader renders them.
+ */
+export function isCountableCandidate(el: Element): boolean {
+  const r = el.getBoundingClientRect();
+  return !(r.width > 0 || r.height > 0) || isVisibleCandidate(el);
 }
 
 /**

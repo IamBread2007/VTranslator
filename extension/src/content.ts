@@ -6,7 +6,7 @@ import {
   TranslateQueue,
 } from "./discover";
 import { pngBlob, renderPage } from "./render";
-import { scan } from "./discovery";
+import { isCountableCandidate, scan } from "./discovery";
 import {
   applyStored as applyStoredPage,
   applyStoredIn,
@@ -952,7 +952,11 @@ mo.observe(document.documentElement, {
  * before the first paid request. A 33-page chapter prompts once, up front,
  * rather than discovering the cost ten pages in.
  */
-/** Every distinct page URL currently mounted, in DOM order. */
+/**
+ * Every distinct page URL currently mounted, in DOM order. Rendered-small
+ * phantoms (site banners, avatars) are excluded: enqueue() would refuse them,
+ * and the batch total must equal the work the user is being asked to approve.
+ */
 function collectUnique(): Map<string, Element> {
   const unique = new Map<string, Element>();
   for (const el of scan(document, {
@@ -961,7 +965,7 @@ function collectUnique(): Map<string, Element> {
     ignoredSubtrees: ignoredSubtrees(location.hostname),
   })) {
     const url = resolveImageUrl(el);
-    if (url) unique.set(url, el);
+    if (url && isCountableCandidate(el)) unique.set(url, el);
   }
   return unique;
 }
