@@ -124,6 +124,17 @@ describe("isMangaCandidate", () => {
     expect(isMangaCandidate(img({ src: "/a.jpg", "data-mt-state": "pending" }))).toBe(false);
     expect(isMangaCandidate(img({ src: "/a.jpg", "data-mt-state": "done" }))).toBe(false);
   });
+
+  it("rejects reaction-sticker images even when their size says page", () => {
+    // Reaction-vote widgets mount hundreds of unloaded alt="sticker" images with
+    // distinct URLs. A loaded-size sticker proves the alt gate works after (and
+    // independently of) the size rules.
+    expect(isMangaCandidate(img({ src: "/s.webp", alt: "sticker", width: "800", height: "1200" }))).toBe(false);
+  });
+
+  it("keeps a normal alt untouched", () => {
+    expect(isMangaCandidate(img({ src: "/p.jpg", alt: "Page 5" }))).toBe(true);
+  });
 });
 
 describe("TranslateQueue", () => {

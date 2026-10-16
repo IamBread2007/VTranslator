@@ -14,6 +14,11 @@ const STATE_ATTR = "data-mt-state";
 const ORIG_SRC_ATTR = "data-mt-original-src";
 // Same discriminator for background-carried pages (see resolveBackgroundUrl).
 const ORIG_BG_ATTR = "data-mt-original-bg";
+// Reaction-vote widgets mount hundreds of unloaded `<img alt="sticker">` with
+// distinct URLs. They carry no size attributes, so the size-unknown rule would
+// queue every one as a phantom page; unlike chapter pages, their alt text
+// identifies them.
+const JUNK_ALT = /\bsticker\b/i;
 // Readers like Pixiv paint each page as a div's background-image, so candidate
 // discovery must accept non-img elements that carry a real background URL.
 const BG_URL = /url\(["']?([^"')]+)["']?\)/;
@@ -125,6 +130,10 @@ export function isMangaCandidate(el: Element): boolean {
   if (el.getAttribute(STATE_ATTR) === "pending" || el.getAttribute(STATE_ATTR) === "done") {
     return false;
   }
+  // Before URL resolution: a sticker must not even count as a discovered page.
+  // Rendered-size checks cannot catch these (they are unloaded/0x0), and
+  // background-div candidates have no alt, so this gate is img-only.
+  if (el instanceof HTMLImageElement && JUNK_ALT.test(el.getAttribute("alt") || "")) return false;
   if (!resolveImageUrl(el)) return false;
   if (!(el instanceof HTMLImageElement)) {
     // A background element has no intrinsic size, so the rendered box is the
