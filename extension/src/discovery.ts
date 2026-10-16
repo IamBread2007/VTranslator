@@ -8,6 +8,13 @@ export type Coverage = "complete" | "progressive";
 export interface ScanOptions {
   wholeDocument: boolean;
   padPx: number;
+  /**
+   * Host-keyed subtrees to leave out of discovery (see `ignoredSubtrees` in
+   * sites.ts). Comment-section images can pass every size filter, and their
+   * containers carry no generic "comment" token, so the site itself declares
+   * which selectors to skip. Empty on hosts with no entry.
+   */
+  ignoredSubtrees: readonly string[];
 }
 
 // Background-carried pages have no dedicated tag and carry no state attributes
@@ -28,6 +35,10 @@ const SELECTOR = 'img, [style*="background-image"]';
 export function scan(root: ParentNode, opts: ScanOptions): Element[] {
   const out: Element[] = [];
   for (const el of root.querySelectorAll(SELECTOR)) {
+    // `closest` matches the element itself too, so an ignored container takes
+    // out everything nested under it, however deep. Skipped when empty so the
+    // unconfigured-host path costs nothing and changes nothing.
+    if (opts.ignoredSubtrees.length > 0 && opts.ignoredSubtrees.some((sel) => el.closest(sel))) continue;
     if (!isMangaCandidate(el)) continue;
     if (!opts.wholeDocument) {
       // Feeds and forums: stay near the viewport. A wider pass here would reach

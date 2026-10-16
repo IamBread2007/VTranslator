@@ -17,7 +17,7 @@ import {
 } from "./apply";
 import { loadSettings } from "./settings";
 import { TranslationStore, type StoreEntry } from "./store";
-import { enqueuesWholeDocument, normalizeHost, normalizeMode, type ReaderMode } from "./sites";
+import { enqueuesWholeDocument, ignoredSubtrees, normalizeHost, normalizeMode, type ReaderMode } from "./sites";
 import {
   STATE,
   APPLIED_BLOB,
@@ -919,6 +919,7 @@ const mo = new MutationObserver((records) => {
           for (const el of scan(node, {
             wholeDocument: enqueuesWholeDocument(readerMode),
             padPx: VIEWPORT_PAD_PX,
+            ignoredSubtrees: ignoredSubtrees(location.hostname),
           })) {
             const url = resolveImageUrl(el);
             if (url) coverage.accept(url);
@@ -957,6 +958,7 @@ function collectUnique(): Map<string, Element> {
   for (const el of scan(document, {
     wholeDocument: enqueuesWholeDocument(readerMode),
     padPx: VIEWPORT_PAD_PX,
+    ignoredSubtrees: ignoredSubtrees(location.hostname),
   })) {
     const url = resolveImageUrl(el);
     if (url) unique.set(url, el);
@@ -1046,6 +1048,7 @@ function onPossibleRediscovery(): void {
   for (const el of scan(document, {
     wholeDocument: enqueuesWholeDocument(readerMode),
     padPx: VIEWPORT_PAD_PX,
+    ignoredSubtrees: ignoredSubtrees(location.hostname),
   })) {
     // Accept here as well as in the observer: a page found by scrolling is
     // translated like any other, and a page that is translated but not counted

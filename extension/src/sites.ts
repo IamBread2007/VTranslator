@@ -35,6 +35,22 @@ export function normalizeHost(host: string): string {
 }
 
 /**
+ * Subtrees a site's own chrome lives in, keyed by host, never matched globally.
+ *
+ * comix.to's comment section lives under classes like `.cm-widget` and
+ * `.cm-item`, which contain no generic "comment" token, so only the host can
+ * identify them. Membership is per-host by construction: a host with no entry
+ * gets an empty list, which is what keeps every other site byte-for-byte
+ * unchanged.
+ */
+export const IGNORED_SUBTREES: Record<string, readonly string[]> = {
+  "comix.to": [".cm-widget", ".rpage-strip-comments"],
+};
+export function ignoredSubtrees(host: string): readonly string[] {
+  return IGNORED_SUBTREES[normalizeHost(host)] ?? [];
+}
+
+/**
  * Coerce an untrusted stored value to a known mode.
  *
  * Anything unrecognised becomes `auto`: a stale or hand-edited entry must never
