@@ -1,7 +1,16 @@
-// Pure text layout: the algorithm lives in the Rust core under ../core and is
-// instantiated as wasm. This module owns the extension-facing API and forwards
-// every call into that instance; it deliberately keeps no second copy.
-import * as core from "../core/pkg/mt_layout.js";
+// Keep one implementation: the Rust core owns layout behavior.
+// Named imports keep the async glue out of Chrome's classic content script; its
+// `import.meta.url` default path would make the injected script fail to parse.
+import {
+  capsFromSliceWidths as capsFromSliceWidthsCore,
+  fitText as fitTextCore,
+  inkRatio,
+  initSync,
+  lineCaps as lineCapsCore,
+  widthAt as widthAtCore,
+  wrapText as wrapTextCore,
+  wrapTextCaps as wrapTextCapsCore,
+} from "../core/pkg/mt_layout.js";
 
 export type Measure = (text: string, fontPx: number) => number;
 
@@ -79,7 +88,7 @@ export async function ensureLayoutWasm(): Promise<void> {
   if (ready) return;
   loading ??= (async () => {
     const bytes = await (await fetch(wasmUrl())).arrayBuffer();
-    core.initSync({ module: bytes });
+    initSync({ module: bytes });
   })();
   try {
     await loading;
@@ -95,16 +104,15 @@ export async function ensureLayoutWasm(): Promise<void> {
  * once with the cheapest export tells "not loaded yet" (vitest pre-initializes
  * the same module in tests/setup.ts) apart from a real call failing later.
  */
-function layout(): typeof core {
+function layout(): void {
   if (!ready) {
     try {
-      core.inkRatio();
+      inkRatio();
     } catch (cause) {
       throw new Error(WASM_ERROR, { cause });
     }
     ready = true;
   }
-  return core;
 }
 
 function slicesJson(box: Box): string {
@@ -131,9 +139,9 @@ export function wrapText(
   fontPx: number,
   measure: Measure,
 ): string[] {
-  const wasm = layout();
-  if (typeof maxWidth === "number") return wasm.wrapText(text, maxWidth, fontPx, measure);
-  return wasm.wrapTextCaps(text, profileCaps(maxWidth, text), fontPx, measure);
+  layout();
+  if (typeof maxWidth === "number") return wrapTextCore(text, maxWidth, fontPx, measure);
+  return wrapTextCapsCore(text, profileCaps(maxWidth, text), fontPx, measure);
 }
 
 /**
@@ -145,7 +153,8 @@ export function wrapText(
  * width is available, reproducing the pre-contour rectangle.
  */
 export function widthAt(box: Box, t: number): number {
-  return layout().widthAt(box.w, box.h, slicesJson(box), t);
+  layout();
+  return widthAtCore(box.w, box.h, slicesJson(box), t);
 }
 
 /**
@@ -155,7 +164,8 @@ export function widthAt(box: Box, t: number): number {
  * exactly as before.
  */
 export function capsFromSliceWidths(box: Box, lineCount: number): number[] {
-  return Array.from(layout().capsFromSliceWidths(box.w, box.h, slicesJson(box), lineCount));
+  layout();
+  return Array.from(capsFromSliceWidthsCore(box.w, box.h, slicesJson(box), lineCount));
 }
 
 /**
@@ -182,8 +192,9 @@ export function lineCaps(
   fontPx: number,
   lineHeight: number,
 ): number[] {
+  layout();
   return Array.from(
-    layout().lineCaps(box.w, box.h, slicesJson(box), shape, lineCount, fontPx, lineHeight),
+    lineCapsCore(box.w, box.h, slicesJson(box), shape, lineCount, fontPx, lineHeight),
   );
 }
 
@@ -194,7 +205,8 @@ export function lineCaps(
  * absolute floor of 8px; overflow=true only when even that cannot fit.
  */
 export function fitText(text: string, box: Box, measure: Measure, opts: FitOptions): FitResult {
-  const raw: FitResult = layout().fitText(
+  layout();
+  const raw: FitResult = fitTextCore(
     text,
     box.w,
     box.h,

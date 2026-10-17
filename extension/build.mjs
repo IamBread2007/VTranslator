@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { Script } from "node:vm";
 import { build } from "esbuild";
 
 // Entries appear as their modules are implemented (Tasks 9→13).
@@ -30,5 +31,9 @@ if (!existsSync(wasm)) {
   process.exit(1);
 }
 cpSync(wasm, "dist/layout.wasm");
+
+// Chrome injects content scripts as classic scripts, so parsing here catches
+// syntax (such as import.meta) that Node's ESM package mode would accept.
+new Script(readFileSync("dist/content.js", "utf8"), { filename: "dist/content.js" });
 
 process.stdout.write(`built ${inputs.length} bundle(s) → dist/\n`);
