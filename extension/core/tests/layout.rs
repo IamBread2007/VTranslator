@@ -47,3 +47,48 @@ fn hangs_one_mark_and_not_a_run() {
     assert_eq!(one, vec!["ab.".to_string()]);
     assert_ne!(run, vec!["ab?!".to_string()]);
 }
+
+fn opts(min_px: f64, max_px: f64) -> mt_layout::FitOptions {
+    mt_layout::FitOptions { min_px, max_px, line_height: 1.2, shape: mt_layout::Shape::Rect }
+}
+
+#[test]
+fn largest_size_that_fits() {
+    let box_ = box_of(100.0, 40.0, None);
+    let fit = mt_layout::fit_text("hello", &box_, &mono, opts(10.0, 40.0));
+    assert!(!fit.overflow);
+    assert!(fit.font_px >= 10.0 && fit.font_px <= 40.0);
+}
+
+#[test]
+fn never_below_eight() {
+    let box_ = box_of(10.0, 10.0, None);
+    let fit = mt_layout::fit_text("a long sentence that cannot fit", &box_, &mono, opts(10.0, 20.0));
+    assert!(fit.overflow);
+    assert!(fit.font_px >= 8.0);
+}
+
+#[test]
+fn degenerate_box_fails_closed() {
+    let box_ = box_of(0.0, -1.0, None);
+    let fit = mt_layout::fit_text("hello", &box_, &mono, opts(12.0, 20.0));
+    assert!(fit.overflow);
+    assert_eq!(fit.font_px, 12.0);
+    assert_eq!(fit.lines, vec!["hello".to_string()]);
+}
+
+#[test]
+fn empty_text_is_one_empty_line() {
+    let box_ = box_of(100.0, 40.0, None);
+    let fit = mt_layout::fit_text("", &box_, &mono, opts(10.0, 20.0));
+    assert_eq!(fit.lines, vec!["".to_string()]);
+}
+
+#[test]
+fn tall_box_stays_within_max_lines() {
+    let box_ = box_of(20.0, 100_000.0, None);
+    let started = std::time::Instant::now();
+    let fit = mt_layout::fit_text("word ".repeat(80).trim(), &box_, &mono, opts(8.0, 12.0));
+    assert!(started.elapsed().as_secs() < 1);
+    assert!(fit.lines.len() <= 64);
+}
