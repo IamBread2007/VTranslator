@@ -62,7 +62,9 @@ fn reserved_width(line: &str, font_px: f64, measure: Measure<'_>) -> f64 {
 }
 
 fn tokenize(text: &str) -> Vec<String> {
-    text.split_whitespace().map(str::to_string).collect()
+    use unicode_normalization::UnicodeNormalization;
+    let normalized: String = text.nfc().collect();
+    normalized.split_whitespace().map(str::to_string).collect()
 }
 
 fn wrap_with(text: &str, cap_at: &dyn Fn(usize) -> f64, font_px: f64, measure: Measure<'_>) -> Vec<String> {
@@ -443,9 +445,10 @@ fn search(text: &str, box_: &Box, shape: Shape, min_px: f64, max_px: f64, lh: f6
 }
 
 pub fn fit_text(text: &str, box_: &Box, measure: Measure<'_>, opts: FitOptions) -> FitResult {
-    if box_.w <= 0.0 || box_.h <= 0.0 {
+    let min_px = opts.min_px.max(ABS_MIN_PX);
+    if box_.w <= 0.0 || box_.h <= 0.0 || opts.max_px < ABS_MIN_PX {
         return FitResult {
-            font_px: opts.min_px,
+            font_px: min_px,
             lines: vec![text.to_string()],
             overflow: true,
             line_height: opts.line_height,
@@ -458,27 +461,26 @@ pub fn fit_text(text: &str, box_: &Box, measure: Measure<'_>, opts: FitOptions) 
         ladder.push(next);
     }
     for lh in &ladder {
-        if let Some(hit) = search(text, box_, opts.shape, opts.min_px, opts.max_px, *lh, measure) {
+        if let Some(hit) = search(text, box_, opts.shape, min_px, opts.max_px, *lh, measure) {
             return hit;
         }
     }
     let tightened = *ladder.last().unwrap();
-    if opts.min_px - 1.0 >= ABS_MIN_PX {
-        if let Some(hit) = search(text, box_, opts.shape, ABS_MIN_PX, opts.min_px - 1.0, tightened, measure) {
+    if min_px - 1.0 >= ABS_MIN_PX {
+        if let Some(hit) = search(text, box_, opts.shape, ABS_MIN_PX, min_px - 1.0, tightened, measure) {
             return hit;
         }
     }
-    let mut lines = wrap_text(text, box_.w, opts.min_px, measure);
+    let mut lines = wrap_text(text, box_.w, min_px, measure);
     // MAX_LINES bounds the search. The overflow fallback must not ignore it.
     if lines.len() > MAX_LINES {
         let tail = lines.split_off(MAX_LINES);
         if let Some(last) = lines.last_mut() {
-            last.push(' ');
-            last.push_str(&tail.join(" "));
+            last.push_str(&tail.concat());
         }
     }
     FitResult {
-        font_px: opts.min_px,
+        font_px: min_px,
         lines,
         overflow: true,
         line_height: opts.line_height,

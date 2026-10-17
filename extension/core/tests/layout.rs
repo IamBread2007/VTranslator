@@ -145,6 +145,38 @@ fn balanced_wrap_keeps_every_character() {
 }
 
 #[test]
+fn fit_text_never_returns_below_eight_even_when_requested_range_is_lower() {
+    let fit = mt_layout::fit_text("x", &box_of(100.0, 100.0, None), &mono, opts(1.0, 1.0));
+    assert_eq!(fit.font_px, 8.0);
+    assert!(fit.overflow);
+}
+
+#[test]
+fn capped_overflow_lines_do_not_invent_characters() {
+    let text = "A".repeat(65);
+    let fit = mt_layout::fit_text(&text, &box_of(1.0, 1.0, None), &mono, opts(8.0, 8.0));
+    assert!(fit.overflow);
+    assert!(fit.lines.len() <= 64);
+    assert_eq!(fit.lines.concat(), text);
+}
+
+#[test]
+fn tokenizer_normalizes_decomposed_unicode_before_measurement() {
+    let lines = mt_layout::wrap_text("e\u{301} e\u{301}", 3.0, 1.0, &mono);
+    assert_eq!(lines, vec!["é é".to_string()]);
+}
+
+#[test]
+fn hanging_marks_keep_the_original_supported_set() {
+    // The full TypeScript HANGING set, in source order. The last three are the
+    // ones the plan's earlier abbreviated set (`.,!?` plus the ellipsis) omitted.
+    for mark in ['.', ',', '!', '?', '…', ':', ';', '”', '’'] {
+        let text = format!("ab{mark}");
+        assert_eq!(mt_layout::wrap_text(&text, 2.0, 1.0, &mono), vec![text]);
+    }
+}
+
+#[test]
 fn balanced_wrap_agrees_with_a_brute_force_scan() {
     for (text, w, h, min_px, max_px) in [
         ("Chuyện này thật sự rất khó tin và phức tạp", 100.0, 60.0, 8.0, 40.0),

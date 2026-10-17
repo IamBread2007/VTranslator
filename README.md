@@ -181,11 +181,13 @@ Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi
 
 ## Bước 4 — Cài extension vào Chrome
 
-1. Build extension (chạy trong thư mục `extension`):
+1. Build extension (chạy trong thư mục `extension`). Cài Node.js, Rust toolchain và `wasm-pack` trước; Rust biên dịch bộ layout sang WebAssembly.
 
    ```bash
    cd extension
    npm install
+   cargo install wasm-pack --locked
+   npm run wasm:build
    npm run build
    ```
 

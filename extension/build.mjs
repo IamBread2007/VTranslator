@@ -10,6 +10,17 @@ mkdirSync("dist", { recursive: true });
 const inputs = ENTRIES.filter((e) => existsSync(e));
 if (inputs.length === 0) throw new Error("no entry points to bundle");
 
+const wasmGlue = "core/pkg/mt_layout.js";
+const wasm = "core/pkg/mt_layout_bg.wasm";
+if (!existsSync(wasmGlue)) {
+  process.stderr.write("layout wasm glue missing; run npm run wasm:build\n");
+  process.exit(1);
+}
+if (!existsSync(wasm)) {
+  process.stderr.write("layout.wasm missing; run npm run wasm:build\n");
+  process.exit(1);
+}
+
 await build({
   entryPoints: inputs,
   outdir: "dist",
@@ -25,11 +36,6 @@ for (const f of ["manifest.json", "src/options.html"]) {
 if (existsSync("fonts")) cpSync("fonts", "dist/fonts", { recursive: true });
 
 // Task 6 loads these bytes at runtime, so the wasm must sit next to the bundles.
-const wasm = "core/pkg/mt_layout_bg.wasm";
-if (!existsSync(wasm)) {
-  process.stderr.write("layout.wasm missing; run npm run wasm:build\n");
-  process.exit(1);
-}
 cpSync(wasm, "dist/layout.wasm");
 
 // Chrome injects content scripts as classic scripts, so parsing here catches

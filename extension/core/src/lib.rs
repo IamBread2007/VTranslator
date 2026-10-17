@@ -95,7 +95,7 @@ mod wasm_api {
         max_px: f64,
         line_height: f64,
         shape: &str,
-    ) -> JsValue {
+    ) -> Result<JsValue, JsValue> {
         let fit = fit_text(
             text,
             &Box { w, h, slice_widths: slices_of(slice_json) },
@@ -108,7 +108,9 @@ mod wasm_api {
             overflow: fit.overflow,
             line_height: fit.line_height,
         })
-        .unwrap_or(JsValue::NULL)
+        .map_err(|error| {
+            JsValue::from_str(&format!("layout fit result serialization failed: {error}"))
+        })
     }
 
     /// A thrown measure is non-finite, which the fitter treats as too wide.

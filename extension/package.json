@@ -5,8 +5,11 @@
   "version": "1.0.0",
   "scripts": {
     "build": "node build.mjs",
+    "prebuild": "npm run wasm:build",
     "wasm:build": "wasm-pack build core --target web --out-dir pkg --release",
     "test": "vitest run",
+    "pretest": "npm run wasm:build",
+    "pretypecheck": "npm run wasm:build",
     "test:integration": "npm run build && vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit"
   },

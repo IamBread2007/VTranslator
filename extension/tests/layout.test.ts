@@ -253,6 +253,36 @@ describe("contour slice widths", () => {
 });
 
 describe("text integrity", () => {
+  it("normalizes decomposed text before measuring in the WASM core", () => {
+    const lines = wrapText("e\u0301 e\u0301", 3, 1, (text) => text.length);
+    expect(lines).toEqual(["é é"]);
+  });
+
+  it("caps overflow lines without inventing characters", () => {
+    const text = "A".repeat(65);
+    const fit = fitText(text, { w: 1, h: 1 }, () => 1, {
+      minPx: 8, maxPx: 8, lineHeight: 1,
+    });
+    expect(fit.overflow).toBe(true);
+    expect(fit.lines.length).toBeLessThanOrEqual(64);
+    expect(fit.lines.join("")).toBe(text);
+  });
+
+  it("never returns a font size below 8px when the requested range is lower", () => {
+    const fit = fitText("x", { w: 100, h: 100 }, () => 1, {
+      minPx: 1, maxPx: 1, lineHeight: 1.2,
+    });
+    expect(fit.fontPx).toBe(8);
+    expect(fit.overflow).toBe(true);
+  });
+
+  it("fails closed when the measure callback throws", () => {
+    const fit = fitText("hello", { w: 100, h: 40 }, () => {
+      throw new Error("measure failure");
+    }, { minPx: 10, maxPx: 20, lineHeight: 1.2 });
+    expect(fit.overflow).toBe(true);
+  });
+
   it("never invents, drops or reorders characters", () => {
     // Cut pieces of one unbreakable word must rejoin with nothing between them;
     // joining them with spaces would both insert whitespace the source never had

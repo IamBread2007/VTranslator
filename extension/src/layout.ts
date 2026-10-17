@@ -206,13 +206,19 @@ export function lineCaps(
  */
 export function fitText(text: string, box: Box, measure: Measure, opts: FitOptions): FitResult {
   layout();
+  // The crate floors at 8 too, but the caller must not hand the search a lower
+  // minPx, and a maxPx below the floor leaves no valid size to pick.
+  const minPx = Math.max(opts.minPx, 8);
+  if (box.w <= 0 || box.h <= 0 || opts.maxPx < 8) {
+    return { fontPx: minPx, lines: [text], overflow: true, lineHeight: opts.lineHeight };
+  }
   const raw: FitResult = fitTextCore(
     text,
     box.w,
     box.h,
     slicesJson(box),
     measure,
-    opts.minPx,
+    minPx,
     opts.maxPx,
     opts.lineHeight,
     opts.shape ?? "rect",
