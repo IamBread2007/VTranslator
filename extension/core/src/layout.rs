@@ -164,28 +164,254 @@ pub fn line_caps(box_: &Box, shape: Shape, line_count: usize, font_px: f64, line
         .collect()
 }
 
-fn fits(lines: &[String], caps: &[f64], font_px: f64, measure: Measure<'_>) -> bool {
-    !lines.is_empty()
-        && lines.len() <= caps.len()
-        && lines.iter().enumerate().all(|(i, line)| {
-            !too_wide(reserved_width(line, font_px, measure), caps[i])
-        })
+/// One text unit of a line: the unit plus the separator that follows it when
+/// another unit joins the same line. Cutting an over-long word by characters
+/// produces pieces of a *single* word, and rejoining those with spaces would
+/// invent whitespace the source never had.
+struct Piece {
+    text: String,
+    sep: String,
+}
+
+/// Badness of one completely empty line, scaling as (1 - fill)^3, and the cost
+/// of bringing one more line into existence. Without the penalty the total is
+/// minimised by using as many lines as possible, which yields one-word lines.
+const BASE_BADNESS: f64 = 1000.0;
+const LINE_PENALTY: f64 = 60.0;
+
+/// How many line counts beyond the best one are still explored. Badness falls as
+/// lines get shorter and LINE_PENALTY pushes back, so the optimum sits at or
+/// just above the smallest feasible count.
+const LOOKAHEAD_LINES: usize = 2;
+
+/// Split one over-long token into pieces that each measure <= max_width.
+fn chunk_token(token: &str, max_width: f64, font_px: f64, measure: Measure<'_>) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut chunk = String::new();
+    for ch in token.chars() {
+        let next = format!("{chunk}{ch}");
+        if !chunk.is_empty() && too_wide(reserved_width(&next, font_px, measure), max_width) {
+            pieces.push(std::mem::take(&mut chunk));
+            chunk = ch.to_string();
+        } else {
+            chunk = next;
+        }
+    }
+    if !chunk.is_empty() {
+        pieces.push(chunk);
+    }
+    pieces
+}
+
+/// Partition `pieces` into exactly `caps.len()` lines so no line reserves more
+/// than its cap, minimising total badness. A greedy pass fills each line to the
+/// brim and strands the leftover on the last line; choosing the cheapest
+/// partition makes the lines even, which is what a balloon needs.
+fn balanced_wrap(
+    pieces: &[Piece],
+    caps: &[f64],
+    font_px: f64,
+    measure: Measure<'_>,
+) -> Option<(Vec<String>, f64)> {
+    let n = caps.len();
+    let m = pieces.len();
+    // Every line needs at least one piece, and no line may sit empty.
+    if n == 0 || m == 0 || m < n {
+        return None;
+    }
+
+    const INF: f64 = f64::INFINITY;
+    // cost[j] = cheapest total for the first j pieces on the lines placed so far.
+    let mut prev = vec![INF; m + 1];
+    prev[0] = 0.0;
+    // starts[k][j] = index of the first piece of line k+1 in the optimal prefix.
+    let mut starts: Vec<Vec<usize>> = Vec::with_capacity(n);
+
+    for i in 1..=n {
+        let cap = caps[i - 1];
+        let mut cur = vec![INF; m + 1];
+        let mut start = vec![usize::MAX; m + 1];
+        for j in 1..=m {
+            // Line i would cover pieces [a, j); grow it backwards until it overflows.
+            let mut text = String::new();
+            let mut a = j;
+            while a >= 1 {
+                a -= 1;
+                let piece = &pieces[a];
+                text = if text.is_empty() {
+                    piece.text.clone()
+                } else {
+                    format!("{}{}{}", piece.text, piece.sep, text)
+                };
+                let w = reserved_width(&text, font_px, measure);
+                // A non-finite measure is "wider than anything", not a NaN that
+                // silently propagates into the fill fraction and yields a finite
+                // cost: the whole block must fail closed instead.
+                if !usable(w) || w > cap {
+                    break;
+                }
+                if !prev[a].is_finite() {
+                    continue;
+                }
+                let fill = if cap > 0.0 { (w / cap).min(1.0) } else { 1.0 };
+                let cost = prev[a] + BASE_BADNESS * (1.0 - fill).powi(3) + LINE_PENALTY;
+                if cost < cur[j] {
+                    cur[j] = cost;
+                    start[j] = a;
+                }
+            }
+        }
+        starts.push(start);
+        prev = cur;
+    }
+
+    if !prev[m].is_finite() {
+        return None;
+    }
+
+    let mut lines = vec![String::new(); n];
+    let mut j = m;
+    for i in (1..=n).rev() {
+        let a = starts[i - 1][j];
+        let mut line = String::new();
+        for k in a..j {
+            let piece = &pieces[k];
+            line = if line.is_empty() {
+                piece.text.clone()
+            } else {
+                format!("{}{}{}", line, piece.sep, piece.text)
+            };
+        }
+        lines[i - 1] = line;
+        j = a;
+    }
+    Some((lines, prev[m]))
+}
+
+/// Best line break for one (fontPx, lineHeight) pair, or null when the text
+/// cannot be placed at that size.
+///
+/// Every feasible line count is tried because the width profile depends on it:
+/// spreading the text over more lines makes each line shorter and therefore more
+/// likely to clear the balloon's narrowing top and bottom.
+fn best_wrap(
+    text: &str,
+    box_: &Box,
+    shape: Shape,
+    font_px: f64,
+    line_height: f64,
+    measure: Measure<'_>,
+) -> Option<Vec<String>> {
+    let line_h = font_px * line_height;
+    // Even a single line has to fit vertically.
+    if line_h > box_.h {
+        return None;
+    }
+
+    let words = tokenize(text);
+    if words.is_empty() {
+        return Some(vec![String::new()]);
+    }
+
+    // A word wider than the widest possible cap can never be placed, so cut it by
+    // characters rather than reporting the whole block unfit. The pieces of one
+    // word rejoin with no separator; only a word boundary contributes a space.
+    let mut pieces: Vec<Piece> = Vec::new();
+    for word in &words {
+        let parts = if too_wide(measure(word, font_px), box_.w) {
+            chunk_token(word, box_.w, font_px, measure)
+        } else {
+            vec![word.clone()]
+        };
+        let last = parts.len().saturating_sub(1);
+        for (index, part) in parts.into_iter().enumerate() {
+            pieces.push(Piece {
+                text: part,
+                sep: if index == last { " ".to_string() } else { String::new() },
+            });
+        }
+    }
+    if pieces.is_empty() {
+        return Some(vec![String::new()]);
+    }
+
+    let max_lines = MAX_LINES
+        .min((box_.h / line_h).floor().max(1.0) as usize)
+        .min(pieces.len());
+
+    // Smallest total width any partition can occupy at a given line count. Every
+    // piece is paid for, and so is every separator — except that a line break
+    // *removes* the separator it breaks at, so a partition with n lines keeps
+    // (total separators - the n-1 it breaks at). The cheapest arrangement breaks
+    // at the widest separators; each line can also hang its own final mark. Every
+    // term makes the result as small as the rules allow, so this is a genuine
+    // lower bound: exceeding the room available proves no partition at n lines
+    // can fit, and it never skips a line count the partitioner could have used.
+    let mut pieces_width = 0.0;
+    let mut breakables: Vec<f64> = Vec::new();
+    let mut hangers: Vec<f64> = Vec::new();
+    for (k, piece) in pieces.iter().enumerate() {
+        pieces_width += measure(&piece.text, font_px);
+        // The final piece's separator is never rendered: nothing follows it.
+        if k < pieces.len() - 1 {
+            breakables.push(measure(&piece.sep, font_px));
+        }
+        // A line may only hang a mark that is actually there to hang, and a line
+        // of punctuation alone cannot vanish, so it needs a character before the mark.
+        let chars: Vec<char> = piece.text.chars().collect();
+        if chars.len() > 1 {
+            if let Some(mark) = chars.last() {
+                if HANGING.contains(mark) {
+                    hangers.push(measure(&mark.to_string(), font_px));
+                }
+            }
+        }
+    }
+    let total_sep: f64 = breakables.iter().sum();
+    breakables.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    hangers.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let prefix = |values: &[f64]| -> Vec<f64> {
+        let mut out = Vec::with_capacity(values.len() + 1);
+        out.push(0.0);
+        for value in values {
+            let next = out[out.len() - 1] + value;
+            out.push(next);
+        }
+        out
+    };
+    // Width freed by breaking at the k widest separators, and by hanging on the k
+    // widest marks.
+    let removed_prefix = prefix(&breakables);
+    let hang_prefix = prefix(&hangers);
+    let room_for = |n: usize| -> f64 {
+        pieces_width + total_sep
+            - removed_prefix[(n - 1).min(breakables.len())]
+            - hang_prefix[n.min(hangers.len())]
+    };
+
+    let mut best: Option<(Vec<String>, f64)> = None;
+    let mut best_n = 0usize;
+    for n in 1..=max_lines {
+        let caps = line_caps(box_, shape, n, font_px, line_height);
+        let room: f64 = caps.iter().sum();
+        if room_for(n) > room {
+            continue;
+        }
+        if best.is_some() && n > best_n + LOOKAHEAD_LINES {
+            break;
+        }
+        if let Some((lines, cost)) = balanced_wrap(&pieces, &caps, font_px, measure) {
+            if best.as_ref().map_or(true, |(_, best_cost)| cost < *best_cost) {
+                best = Some((lines, cost));
+                best_n = n;
+            }
+        }
+    }
+    best.map(|(lines, _)| lines)
 }
 
 fn place(text: &str, box_: &Box, shape: Shape, font_px: f64, line_height: f64, measure: Measure<'_>) -> Option<Vec<String>> {
-    let line_h = font_px * line_height;
-    if line_h > box_.h || box_.w <= 0.0 || box_.h <= 0.0 {
-        return None;
-    }
-    let max_lines = MAX_LINES.min((box_.h / line_h).floor().max(1.0) as usize);
-    for n in 1..=max_lines {
-        let caps = line_caps(box_, shape, n, font_px, line_height);
-        let lines = wrap_text_caps(text, &caps, font_px, measure);
-        if lines.len() <= n && fits(&lines, &caps, font_px, measure) {
-            return Some(lines);
-        }
-    }
-    None
+    best_wrap(text, box_, shape, font_px, line_height, measure)
 }
 
 fn search(text: &str, box_: &Box, shape: Shape, min_px: f64, max_px: f64, lh: f64, measure: Measure<'_>) -> Option<FitResult> {

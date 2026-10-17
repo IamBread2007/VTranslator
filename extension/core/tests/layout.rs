@@ -85,10 +85,91 @@ fn empty_text_is_one_empty_line() {
 }
 
 #[test]
+fn a_bad_measure_cannot_pick_an_unbounded_font() {
+    let box_ = box_of(100.0, 40.0, None);
+    let fit = mt_layout::fit_text("hello", &box_, &|_, _| f64::NAN, opts(10.0, 20.0));
+    assert!(fit.overflow);
+}
+
+#[test]
 fn tall_box_stays_within_max_lines() {
     let box_ = box_of(20.0, 100_000.0, None);
     let started = std::time::Instant::now();
     let fit = mt_layout::fit_text("word ".repeat(80).trim(), &box_, &mono, opts(8.0, 12.0));
     assert!(started.elapsed().as_secs() < 1);
     assert!(fit.lines.len() <= 64);
+}
+
+/// The vitest measure: half a pixel per character per px of font size.
+fn half(text: &str, px: f64) -> f64 {
+    text.chars().count() as f64 * px * 0.5
+}
+
+#[test]
+fn balanced_wrap_leaves_no_one_word_final_line() {
+    let text = "Anh không cần phải lo lắng về chuyện đó đâu";
+    let box_ = box_of(95.0, 66.0, None);
+    let fit = mt_layout::fit_text(text, &box_, &half, opts(8.0, 64.0));
+    assert!(!fit.overflow);
+    let last = fit.lines.last().unwrap();
+    assert!(last.split(' ').count() > 1, "widowed final line: {:?}", fit.lines);
+}
+
+#[test]
+fn balanced_wrap_never_widens_the_final_line_past_the_cap() {
+    let box_ = box_of(110.0, 55.0, None);
+    let fit = mt_layout::fit_text(
+        "Chúng ta phải rời khỏi đây ngay lập tức",
+        &box_,
+        &half,
+        opts(8.0, 64.0),
+    );
+    let widest = fit.lines.iter().map(|l| half(l, fit.font_px)).fold(0.0, f64::max);
+    assert!(widest <= 110.0, "final line widened to {widest}");
+}
+
+#[test]
+fn balanced_wrap_keeps_every_character() {
+    let cases = [
+        ("AAAAAAAAAAAAAAAAAAAAAAAA", 120.0, 120.0),
+        ("iiiiiiiiiiiiiiiiiiiiiiiiiiiiii", 150.0, 90.0),
+        ("một hai ba bốn năm sáu bảy tám chín mười", 100.0, 60.0),
+        ("Tôi... không hiểu?!", 100.0, 60.0),
+    ];
+    for (text, w, h) in cases {
+        let fit = mt_layout::fit_text(text, &box_of(w, h, None), &half, opts(8.0, 64.0));
+        let joined: String = fit.lines.join("");
+        let strip = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(strip(&joined), strip(text), "text={text:?} lines={:?}", fit.lines);
+    }
+}
+
+#[test]
+fn balanced_wrap_agrees_with_a_brute_force_scan() {
+    for (text, w, h, min_px, max_px) in [
+        ("Chuyện này thật sự rất khó tin và phức tạp", 100.0, 60.0, 8.0, 40.0),
+        ("AA BB CC DD EE FF GG HH", 150.0, 90.0, 8.0, 40.0),
+        (&"chữ ".repeat(60), 120.0, 120.0, 8.0, 30.0),
+    ] {
+        let box_ = box_of(w, h, None);
+        let fit = mt_layout::fit_text(&text, &box_, &half, opts(min_px, max_px));
+        if fit.overflow {
+            continue;
+        }
+        let mut brute = 0.0;
+        let mut px = min_px;
+        while px <= max_px {
+            let pinned = mt_layout::fit_text(
+                &text,
+                &box_,
+                &half,
+                mt_layout::FitOptions { min_px: px, max_px: px, line_height: fit.line_height, shape: mt_layout::Shape::Rect },
+            );
+            if !pinned.overflow && pinned.font_px == px && pinned.line_height == fit.line_height {
+                brute = px;
+            }
+            px += 1.0;
+        }
+        assert_eq!(fit.font_px, brute, "text={text:.24?} lh={}", fit.line_height);
+    }
 }

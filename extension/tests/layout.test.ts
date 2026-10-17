@@ -242,6 +242,14 @@ describe("contour slice widths", () => {
   it("falls back to the rectangle when the server sent no profile", () => {
     expect(capsFromSliceWidths({ w: 100, h: 100 }, 3)).toEqual([100, 100, 100]);
   });
+
+  it("clamps a contour sample to the box", () => {
+    const caps = capsFromSliceWidths({ w: 100, h: 40, slice_widths: [1.5, -1] }, 2);
+    for (const cap of caps) {
+      expect(cap).toBeGreaterThanOrEqual(0);
+      expect(cap).toBeLessThanOrEqual(100);
+    }
+  });
 });
 
 describe("text integrity", () => {
@@ -261,6 +269,30 @@ describe("text integrity", () => {
       const r = fitText(text, box, m, { minPx: 8, maxPx: 64, lineHeight: 1.2 });
       expect(strip(r.lines.join(" ")), `text=${JSON.stringify(text.slice(0, 24))}`).toBe(strip(text));
     }
+  });
+});
+
+describe("fails closed", () => {
+  it("fails closed on a degenerate box", () => {
+    const fit = fitText("hello", { w: 0, h: -1 }, (text) => text.length * 10, {
+      minPx: 12, maxPx: 20, lineHeight: 1.2,
+    });
+    expect(fit.overflow).toBe(true);
+    expect(fit.fontPx).toBe(12);
+  });
+
+  it("treats a bad measure as overflow", () => {
+    const fit = fitText("hello", { w: 100, h: 40 }, () => Number.NaN, {
+      minPx: 10, maxPx: 20, lineHeight: 1.2,
+    });
+    expect(fit.overflow).toBe(true);
+  });
+
+  it("returns one empty line for empty text", () => {
+    const fit = fitText("", { w: 100, h: 40 }, () => 0, {
+      minPx: 10, maxPx: 20, lineHeight: 1.2,
+    });
+    expect(fit.lines).toEqual([""]);
   });
 });
 

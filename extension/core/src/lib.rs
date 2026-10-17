@@ -11,7 +11,8 @@ mod wasm_api {
     use wasm_bindgen::prelude::*;
 
     use crate::layout::{
-        caps_from_slice_widths, fit_text, line_caps, width_at, wrap_text, Box, FitOptions, Shape,
+        caps_from_slice_widths, fit_text, line_caps, width_at, wrap_text, wrap_text_caps, Box,
+        FitOptions, Shape,
     };
 
     fn shape_of(name: &str) -> Shape {
@@ -61,6 +62,16 @@ mod wasm_api {
     #[wasm_bindgen(js_name = wrapText)]
     pub fn wrap_text_js(text: &str, max_width: f64, font_px: f64, measure: &js_sys::Function) -> Vec<String> {
         wrap_text(text, max_width, font_px, &|s, px| call_measure(measure, s, px))
+    }
+
+    #[wasm_bindgen(js_name = wrapTextCaps)]
+    pub fn wrap_text_caps_js(
+        text: &str,
+        caps: &[f64],
+        font_px: f64,
+        measure: &js_sys::Function,
+    ) -> Vec<String> {
+        wrap_text_caps(text, caps, font_px, &|s, px| call_measure(measure, s, px))
     }
 
     #[derive(serde::Serialize)]
