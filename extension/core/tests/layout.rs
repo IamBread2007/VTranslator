@@ -28,3 +28,22 @@ fn samples_outside_zero_one_cannot_widen_the_box() {
     assert!(mt_layout::width_at(&box_, 0.0) <= 100.0);
     assert!(mt_layout::width_at(&box_, 1.0) >= 0.0);
 }
+
+fn mono(text: &str, px: f64) -> f64 {
+    text.chars().count() as f64 * px
+}
+
+#[test]
+fn wraps_on_words_and_keeps_every_character() {
+    let lines = mt_layout::wrap_text("xin chào bạn", 8.0, 1.0, &mono);
+    let joined = lines.join("");
+    assert_eq!(joined.replace(' ', ""), "xinchàobạn");
+}
+
+#[test]
+fn hangs_one_mark_and_not_a_run() {
+    let one = mt_layout::wrap_text("ab.", 2.0, 1.0, &mono);
+    let run = mt_layout::wrap_text("ab?!", 2.0, 1.0, &mono);
+    assert_eq!(one, vec!["ab.".to_string()]);
+    assert_ne!(run, vec!["ab?!".to_string()]);
+}
