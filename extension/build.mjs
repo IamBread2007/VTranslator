@@ -22,4 +22,13 @@ for (const f of ["manifest.json", "src/options.html"]) {
   cpSync(f, `dist/${f.replace("src/", "")}`);
 }
 if (existsSync("fonts")) cpSync("fonts", "dist/fonts", { recursive: true });
+
+// Task 6 loads these bytes at runtime, so the wasm must sit next to the bundles.
+const wasm = "core/pkg/mt_layout_bg.wasm";
+if (!existsSync(wasm)) {
+  process.stderr.write("layout.wasm missing; run npm run wasm:build\n");
+  process.exit(1);
+}
+cpSync(wasm, "dist/layout.wasm");
+
 process.stdout.write(`built ${inputs.length} bundle(s) → dist/\n`);
