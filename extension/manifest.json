@@ -27,7 +27,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["fonts/*"],
+      "resources": ["fonts/*", "layout.wasm"],
       "matches": ["<all_urls>"]
     }
   ]

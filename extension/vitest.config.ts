@@ -7,5 +7,6 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**", "tests/integration/**"],
+    setupFiles: ["tests/setup.ts"],
   },
 });

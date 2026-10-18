@@ -1,4 +1,4 @@
-import { fitText, type Measure } from "./layout";
+import { ensureLayoutWasm, fitText, type Measure } from "./layout";
 import type { Block } from "./types";
 
 export const FONT_FILES: Record<Block["style"]["font"], string> = {
@@ -92,6 +92,7 @@ export async function renderPage(
   blocks: readonly Block[],
   opts: ComposeOptions = {},
 ): Promise<Blob> {
+  await ensureLayoutWasm();
   await ensureFonts();
   const bmp = await createImageBitmap(inpainted);
 

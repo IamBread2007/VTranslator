@@ -242,9 +242,47 @@ describe("contour slice widths", () => {
   it("falls back to the rectangle when the server sent no profile", () => {
     expect(capsFromSliceWidths({ w: 100, h: 100 }, 3)).toEqual([100, 100, 100]);
   });
+
+  it("clamps a contour sample to the box", () => {
+    const caps = capsFromSliceWidths({ w: 100, h: 40, slice_widths: [1.5, -1] }, 2);
+    for (const cap of caps) {
+      expect(cap).toBeGreaterThanOrEqual(0);
+      expect(cap).toBeLessThanOrEqual(100);
+    }
+  });
 });
 
 describe("text integrity", () => {
+  it("normalizes decomposed text before measuring in the WASM core", () => {
+    const lines = wrapText("e\u0301 e\u0301", 3, 1, (text) => text.length);
+    expect(lines).toEqual(["é é"]);
+  });
+
+  it("caps overflow lines without inventing characters", () => {
+    const text = "A".repeat(65);
+    const fit = fitText(text, { w: 1, h: 1 }, () => 1, {
+      minPx: 8, maxPx: 8, lineHeight: 1,
+    });
+    expect(fit.overflow).toBe(true);
+    expect(fit.lines.length).toBeLessThanOrEqual(64);
+    expect(fit.lines.join("")).toBe(text);
+  });
+
+  it("never returns a font size below 8px when the requested range is lower", () => {
+    const fit = fitText("x", { w: 100, h: 100 }, () => 1, {
+      minPx: 1, maxPx: 1, lineHeight: 1.2,
+    });
+    expect(fit.fontPx).toBe(8);
+    expect(fit.overflow).toBe(true);
+  });
+
+  it("fails closed when the measure callback throws", () => {
+    const fit = fitText("hello", { w: 100, h: 40 }, () => {
+      throw new Error("measure failure");
+    }, { minPx: 10, maxPx: 20, lineHeight: 1.2 });
+    expect(fit.overflow).toBe(true);
+  });
+
   it("never invents, drops or reorders characters", () => {
     // Cut pieces of one unbreakable word must rejoin with nothing between them;
     // joining them with spaces would both insert whitespace the source never had
@@ -261,6 +299,30 @@ describe("text integrity", () => {
       const r = fitText(text, box, m, { minPx: 8, maxPx: 64, lineHeight: 1.2 });
       expect(strip(r.lines.join(" ")), `text=${JSON.stringify(text.slice(0, 24))}`).toBe(strip(text));
     }
+  });
+});
+
+describe("fails closed", () => {
+  it("fails closed on a degenerate box", () => {
+    const fit = fitText("hello", { w: 0, h: -1 }, (text) => text.length * 10, {
+      minPx: 12, maxPx: 20, lineHeight: 1.2,
+    });
+    expect(fit.overflow).toBe(true);
+    expect(fit.fontPx).toBe(12);
+  });
+
+  it("treats a bad measure as overflow", () => {
+    const fit = fitText("hello", { w: 100, h: 40 }, () => Number.NaN, {
+      minPx: 10, maxPx: 20, lineHeight: 1.2,
+    });
+    expect(fit.overflow).toBe(true);
+  });
+
+  it("returns one empty line for empty text", () => {
+    const fit = fitText("", { w: 100, h: 40 }, () => 0, {
+      minPx: 10, maxPx: 20, lineHeight: 1.2,
+    });
+    expect(fit.lines).toEqual([""]);
   });
 });
 
