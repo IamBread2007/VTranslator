@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Manga Translator",
   "description": "Dịch truyện tranh trực tiếp trên trang đọc, dùng server local.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "permissions": ["storage", "declarativeNetRequest", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },

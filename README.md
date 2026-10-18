@@ -3,7 +3,7 @@
 Tiện ích Chrome giúp bạn đọc truyện chữ Nhật/Hàn/Trung bằng tiếng Việt: chữ gốc
 trong ảnh được xoá và thay bằng chữ Việt, ngay trên trang bạn đang đọc.
 
-**Bản v1.0 làm được gì:**
+**Bản v1.1 làm được gì:**
 - Bấm **Alt+T** dịch cả chương đang mở (có hỏi trước khi dịch nếu nhiều trang,
   vì mỗi trang tốn một lần gọi AI).
 - **Di chuột vào ảnh** → nút **Dịch** để dịch từng ảnh lẻ.
@@ -13,6 +13,7 @@ trong ảnh được xoá và thay bằng chữ Việt, ngay trên trang bạn �
 - Lật trang đi rồi quay lại vẫn giữ bản dịch, không phải dịch lại.
 - Tự bỏ qua ảnh đại diện (avatar), ảnh bình luận khi đếm số trang.
 - Nhớ từ riêng/tên riêng và cách xưng hô (anh/em, cậu/tớ…) suốt cả chương.
+- Dùng bộ dàn chữ Rust/WebAssembly trong extension.
 
 Gồm hai phần (bạn sẽ cài cả hai):
 
