@@ -27,7 +27,7 @@ Gồm hai phần (bạn sẽ cài cả hai):
 
 ## Mục lục
 
-0. [Chuẩn bị](#0-chuẩn-bị)
+0. [Yêu cầu thiết bị và chuẩn bị](#0-yêu-cầu-thiết-bị-và-chuẩn-bị)
 1. [Bước 1 — Tạo token (mật khẩu nội bộ)](#bước-1--tạo-token-mật-khẩu-nội-bộ)
 2. [Bước 2 — Lấy API key để dịch](#bước-2--lấy-api-key-để-dịch)
 3. [Bước 3 — Chạy server](#bước-3--chạy-server)
@@ -40,19 +40,43 @@ Gồm hai phần (bạn sẽ cài cả hai):
 
 ---
 
-## 0. Chuẩn bị
+## 0. Yêu cầu thiết bị và chuẩn bị
 
-Cài sẵn các phần mềm sau (bấm vào tên để tải):
+### Thiết bị tối thiểu
 
-- **Python 3.12** — tải từ python.org. (Quan trọng: đúng bản 3.12. Bản 3.14
-  chưa chạy được thư viện đọc chữ.)
-  - Khi cài, **tích chọn ô "Add python.exe to PATH"** ở màn hình đầu tiên.
-- **Node.js 18 trở lên** — tải từ nodejs.org. Chỉ dùng một lần để đóng gói
-  extension.
-- **Google Chrome**.
+- **Windows 10 hoặc 11 64-bit** trên CPU x64 (Intel/AMD). PaddlePaddle không
+  hỗ trợ Windows ARM64 trong cấu hình này.
+- **RAM 8 GB** là mức tối thiểu; **16 GB** giúp ổn định hơn khi xử lý ảnh lớn
+  hoặc mở nhiều tab truyện.
+- Cần **ít nhất 8 GB trống để chạy** sau khi cài. Nếu build từ mã nguồn trên
+  máy này, nên chừa **ít nhất 10 GB** để có chỗ cho Rust, Node.js, file tải về
+  và file tạm. Phần chạy thực tế gồm server Python và model nhận dạng chữ/phát
+  hiện bong bóng tại máy:
 
-Máy có card NVIDIA thì dịch nhanh hơn, không có vẫn chạy được (chậm hơn).
-RAM nên từ 8GB trở lên.
+  | Thành phần | Dung lượng tham khảo |
+  | --- | ---: |
+  | Môi trường Python và thư viện OCR/AI cục bộ | khoảng 4,5 GB |
+  | Model nhận dạng chữ và phát hiện bong bóng | khoảng 1,1 GB |
+  | Extension Chrome đã build | dưới 1 MB |
+  | Phần trống dành cho tải xuống và file tạm | khoảng 1,5 GB |
+
+  Cache ảnh đã xử lý tại `server\.cache` có thể tăng thêm khoảng 1 GB hoặc hơn
+  khi dịch nhiều chương. Model **dịch** dùng API nên không tải LLM dịch về máy.
+- Kết nối Internet khi cài lần đầu, tải model OCR/phát hiện và gọi API dịch.
+  Dùng GPU NVIDIA là tuỳ chọn; không có GPU vẫn chạy được nhưng chậm hơn.
+
+### Phần mềm cần cài
+
+- **[Python 3.12.10 64-bit](https://www.python.org/downloads/release/python-31210/)**.
+  Đây là bản đã kiểm tra cho server. Không dùng Python 3.14 vì PaddlePaddle
+  chưa có gói cài đặt tương thích.
+  - Khi cài, tích **Add python.exe to PATH**.
+  - Nếu installer có tuỳ chọn Python Launcher, hãy cài để dùng được lệnh `py`.
+- **[Node.js 18 trở lên](https://nodejs.org/en/download)**. Chỉ cần khi build
+  extension; bản LTS là lựa chọn phù hợp.
+- **[Rust toolchain](https://rustup.rs/)**. Chỉ cần khi build extension; Rust
+  biên dịch bộ dàn chữ sang WebAssembly.
+- **[Google Chrome](https://www.google.com/chrome/)** để cài extension.
 
 Tải mã nguồn về máy (**Code → Download ZIP** trên GitHub, rồi giải nén), hoặc
 dùng git:
@@ -85,7 +109,7 @@ git clone <https://github.com/IamBread2007/VTranslator.git>
 ## Bước 2 — Lấy API key để dịch
 
 Server cần một dịch vụ AI để đọc và dịch chữ. Chúng tôi khuyên dùng
-**OpenRouter**: một địa chỉ duy nhất để dùng nhiều model AI, có sẵn model miễn phí.
+**OpenRouter**: một địa chỉ để dùng nhiều model AI, trong đó có model miễn phí.
 
 ### 2.1. Tạo tài khoản
 
@@ -133,15 +157,39 @@ Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi
 
 ## Bước 3 — Chạy server
 
-1. Mở **PowerShell** trong thư mục `server`:
+1. Mở **PowerShell** trong thư mục `server`, rồi kiểm tra đúng Python 3.12:
 
-   ```bash
+   ```powershell
    cd server
-   python -m venv .venv
-   .venv\Scripts\pip install -r requirements.txt
+   python --version
    ```
 
-   (Lần đầu mất vài phút để tải thư viện.)
+   Kết quả phải là `Python 3.12.x`. Nếu `python` đang trỏ tới bản khác hoặc
+   không chạy, dùng đường dẫn mặc định của Python 3.12.10:
+
+   ```powershell
+   & "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv
+   ```
+
+   Nếu `python --version` đã là 3.12.x, tạo môi trường bằng:
+
+   ```powershell
+   python -m venv .venv
+   ```
+
+   > Nếu đã có thư mục `.venv` tạo bằng Python 3.14 hoặc phiên bản khác, dừng
+   > server, xoá **riêng** thư mục `.venv`, rồi mới tạo lại bằng Python 3.12.
+   > Không xoá `server\.env` vì file đó chứa cấu hình riêng.
+
+   Cài thư viện vào đúng môi trường vừa tạo:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m pip install --timeout 120 --retries 10 -r requirements.txt
+   ```
+
+   Lần đầu có thể mất nhiều phút vì phải tải PyTorch, PaddleOCR và model phụ thuộc.
+   Không dừng cửa sổ nếu pip vẫn đang tải dữ liệu. Lần dịch đầu tiên cũng có thể
+   chậm hơn vì server tải model OCR và phát hiện bong bóng về máy khi cần.
 
 2. Tạo file cấu hình từ mẫu:
 
@@ -181,17 +229,18 @@ Bạn cũng có thể dùng dịch vụ khác có API tương thích OpenAI. Khi
 
 ## Bước 4 — Cài extension vào Chrome
 
-1. Build extension (chạy trong thư mục `extension`). Cài Node.js, Rust toolchain và `wasm-pack` trước; Rust biên dịch bộ layout sang WebAssembly.
+1. Build extension (chạy trong thư mục `extension`). Cài Node.js và Rust
+   toolchain ở Bước 0 trước.
 
-   ```bash
+   ```powershell
    cd extension
    npm install
    cargo install wasm-pack --locked
-   npm run wasm:build
    npm run build
    ```
 
-   Sau bước này có thư mục `extension\dist`. Đây là thư mục bạn cần cài.
+   `npm run build` tự biên dịch bộ dàn chữ Rust thành WebAssembly rồi tạo
+   `extension\dist`. Đây là thư mục bạn cần cài.
 
 2. Mở Chrome, gõ vào thanh địa chỉ: `chrome://extensions`
 3. Bật công tắc **Developer mode** (Chế độ nhà phát triển) ở góc trên bên phải.
@@ -263,7 +312,8 @@ là bản mới không có hiệu lực:
    `.venv\Scripts\pip install -r requirements.txt` trong thư mục `server`.
 3. **Tắt server cũ, chạy lại server** (bước này ai cũng quên):
    `.venv\Scripts\python -m mt`
-4. Trong thư mục `extension`, chạy lại `npm run build`.
+4. Trong thư mục `extension`, chạy lại `npm run build`. Lệnh này tự biên dịch
+   lại phần Rust/WebAssembly trước khi đóng gói extension.
 5. Vào `chrome://extensions` → bấm nút **Reload** (vòng tròn) của tiện ích.
 6. **F5 (tải lại) các tab truyện đang mở** — tab cũ vẫn chạy code cũ cho tới
    khi tải lại trang.
@@ -283,8 +333,10 @@ là bản mới không có hiệu lực:
 | Alt+T đếm nhiều hơn số trang truyện | Đếm cả avatar/ảnh bình luận | Từ v1.0 extension đã tự bỏ qua avatar và ảnh trong khung bình luận. Nếu vẫn thấy, thử F5 tải lại trang rồi Alt+T lại |
 | Alt+T báo xong nhưng vài trang trắng trơn | Trang đó chưa tải xong khi bấm | Lật tới trang đó cho ảnh hiện ra rồi Alt+T lại |
 | Lỗi cài `torch` (file bị khoá) | Server đang chạy và giữ thư viện | Tắt server trước khi cài |
+| `No matching distribution found for paddlepaddle` | Đang tạo `.venv` bằng Python 3.14 hoặc bản không được hỗ trợ | Cài Python 3.12.10, xoá riêng thư mục `.venv`, rồi tạo lại bằng Python 3.12 theo Bước 3 |
+| `py` không được nhận diện | Python Launcher chưa được cài hoặc chưa vào PATH | Dùng lệnh đầy đủ `& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m venv .venv` ở Bước 3 |
 | Trang Cloudflare bắt xác minh | Trang truyện chống bot | Mở trang bằng Chrome thường, bấm xác minh một lần rồi hãy dịch |
-| Dùng model local Ollama mà không dịch được | Model chỉ-chữ (không đọc ảnh) | Server luôn gửi kèm ảnh trang truyện, model chỉ-chữ sẽ treo tới hết giờ. Hãy dùng model đọc được ảnh, hoặc hỏi người rành để bật chế độ chỉ-chữ |
+| Dùng model local Ollama mà không dịch được | Model chỉ-chữ (không đọc ảnh) | Server luôn gửi kèm ảnh trang truyện, model chỉ-chữ sẽ timeout. Hãy dùng model đọc được ảnh, hoặc hỏi người rành để bật chế độ chỉ-chữ |
 
 ---
 
