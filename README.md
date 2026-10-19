@@ -62,7 +62,7 @@ Gồm hai phần (bạn sẽ cài cả hai):
   | Phần trống dành cho tải xuống và file tạm | khoảng 1,5 GB |
 
   Cache ảnh đã xử lý tại `server\.cache` có thể tăng thêm khoảng 1 GB hoặc hơn
-  khi dịch nhiều chương. Model **dịch** dùng API nên không tải LLM dịch về máy.
+  khi dịch nhiều chương (sau khi dịch xong không dùng extension nữa có thể xóa). Model **dịch** dùng API nên không tải LLM dịch về máy.
 - Kết nối Internet khi cài lần đầu, tải model OCR/phát hiện và gọi API dịch.
   Dùng GPU NVIDIA là tuỳ chọn; không có GPU vẫn chạy được nhưng chậm hơn.
 
